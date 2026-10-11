@@ -14,7 +14,175 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      companies: {
+        Row: {
+          careers_url: string | null
+          category: string
+          created_at: string
+          created_by: string | null
+          hq: string | null
+          id: string
+          name: string
+          website: string | null
+        }
+        Insert: {
+          careers_url?: string | null
+          category?: string
+          created_at?: string
+          created_by?: string | null
+          hq?: string | null
+          id?: string
+          name: string
+          website?: string | null
+        }
+        Update: {
+          careers_url?: string | null
+          category?: string
+          created_at?: string
+          created_by?: string | null
+          hq?: string | null
+          id?: string
+          name?: string
+          website?: string | null
+        }
+        Relationships: []
+      }
+      jobs: {
+        Row: {
+          applied_at: string | null
+          company_id: string
+          description: string | null
+          experience: string | null
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          location: string | null
+          matched_skills: string[] | null
+          missing_skills: string[] | null
+          score: number | null
+          score_summary: string | null
+          status: string
+          title: string
+          url: string
+          user_id: string
+        }
+        Insert: {
+          applied_at?: string | null
+          company_id: string
+          description?: string | null
+          experience?: string | null
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          location?: string | null
+          matched_skills?: string[] | null
+          missing_skills?: string[] | null
+          score?: number | null
+          score_summary?: string | null
+          status?: string
+          title: string
+          url: string
+          user_id: string
+        }
+        Update: {
+          applied_at?: string | null
+          company_id?: string
+          description?: string | null
+          experience?: string | null
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          location?: string | null
+          matched_skills?: string[] | null
+          missing_skills?: string[] | null
+          score?: number | null
+          score_summary?: string | null
+          status?: string
+          title?: string
+          url?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jobs_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tracked_companies: {
+        Row: {
+          company_id: string
+          created_at: string
+          id: string
+          last_checked_at: string | null
+          last_error: string | null
+          user_id: string
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          id?: string
+          last_checked_at?: string | null
+          last_error?: string | null
+          user_id: string
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          id?: string
+          last_checked_at?: string | null
+          last_error?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tracked_companies_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_settings: {
+        Row: {
+          last_scheduled_slot: string | null
+          paused_reason: string | null
+          resume_text: string
+          role_keywords: string[]
+          running_until: string | null
+          schedule_enabled: boolean
+          schedule_hours: number[]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          last_scheduled_slot?: string | null
+          paused_reason?: string | null
+          resume_text?: string
+          role_keywords?: string[]
+          running_until?: string | null
+          schedule_enabled?: boolean
+          schedule_hours?: number[]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          last_scheduled_slot?: string | null
+          paused_reason?: string | null
+          resume_text?: string
+          role_keywords?: string[]
+          running_until?: string | null
+          schedule_enabled?: boolean
+          schedule_hours?: number[]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
