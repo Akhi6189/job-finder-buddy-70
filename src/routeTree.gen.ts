@@ -10,33 +10,108 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as AuthenticatedCompaniesRouteImport } from './routes/_authenticated/companies'
+import { Route as AuthenticatedJobsRouteImport } from './routes/_authenticated/jobs'
+import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as ApiPublicHooksScheduledScanRouteImport } from './routes/api/public/hooks/scheduled-scan'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
+  id: '/_authenticated',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedCompaniesRoute = AuthenticatedCompaniesRouteImport.update({
+  id: '/companies',
+  path: '/companies',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedJobsRoute = AuthenticatedJobsRouteImport.update({
+  id: '/jobs',
+  path: '/jobs',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const ApiPublicHooksScheduledScanRoute =
+  ApiPublicHooksScheduledScanRouteImport.update({
+    id: '/api/public/hooks/scheduled-scan',
+    path: '/api/public/hooks/scheduled-scan',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
+  '/companies': typeof AuthenticatedCompaniesRoute
+  '/jobs': typeof AuthenticatedJobsRoute
+  '/settings': typeof AuthenticatedSettingsRoute
+  '/api/public/hooks/scheduled-scan': typeof ApiPublicHooksScheduledScanRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
+  '/companies': typeof AuthenticatedCompaniesRoute
+  '/jobs': typeof AuthenticatedJobsRoute
+  '/settings': typeof AuthenticatedSettingsRoute
+  '/api/public/hooks/scheduled-scan': typeof ApiPublicHooksScheduledScanRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
+  '/auth': typeof AuthRoute
+  '/_authenticated/companies': typeof AuthenticatedCompaniesRoute
+  '/_authenticated/jobs': typeof AuthenticatedJobsRoute
+  '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/api/public/hooks/scheduled-scan': typeof ApiPublicHooksScheduledScanRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/auth'
+    | '/companies'
+    | '/jobs'
+    | '/settings'
+    | '/api/public/hooks/scheduled-scan'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/auth'
+    | '/companies'
+    | '/jobs'
+    | '/settings'
+    | '/api/public/hooks/scheduled-scan'
+  id:
+    | '__root__'
+    | '/'
+    | '/_authenticated'
+    | '/auth'
+    | '/_authenticated/companies'
+    | '/_authenticated/jobs'
+    | '/_authenticated/settings'
+    | '/api/public/hooks/scheduled-scan'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
+  AuthRoute: typeof AuthRoute
+  ApiPublicHooksScheduledScanRoute: typeof ApiPublicHooksScheduledScanRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +123,71 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated': {
+      id: '/_authenticated'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthenticatedRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/companies': {
+      id: '/_authenticated/companies'
+      path: '/companies'
+      fullPath: '/companies'
+      preLoaderRoute: typeof AuthenticatedCompaniesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/jobs': {
+      id: '/_authenticated/jobs'
+      path: '/jobs'
+      fullPath: '/jobs'
+      preLoaderRoute: typeof AuthenticatedJobsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/settings': {
+      id: '/_authenticated/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/api/public/hooks/scheduled-scan': {
+      id: '/api/public/hooks/scheduled-scan'
+      path: '/api/public/hooks/scheduled-scan'
+      fullPath: '/api/public/hooks/scheduled-scan'
+      preLoaderRoute: typeof ApiPublicHooksScheduledScanRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
+interface AuthenticatedRouteRouteChildren {
+  AuthenticatedCompaniesRoute: typeof AuthenticatedCompaniesRoute
+  AuthenticatedJobsRoute: typeof AuthenticatedJobsRoute
+  AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+}
+
+const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedCompaniesRoute: AuthenticatedCompaniesRoute,
+  AuthenticatedJobsRoute: AuthenticatedJobsRoute,
+  AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+}
+
+const AuthenticatedRouteRouteWithChildren =
+  AuthenticatedRouteRoute._addFileChildren(AuthenticatedRouteRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
+  AuthRoute: AuthRoute,
+  ApiPublicHooksScheduledScanRoute: ApiPublicHooksScheduledScanRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
