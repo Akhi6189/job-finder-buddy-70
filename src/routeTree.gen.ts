@@ -10,33 +10,44 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiPublicHooksScheduledScanRouteImport } from './routes/api/public/hooks/scheduled-scan'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicHooksScheduledScanRoute =
+  ApiPublicHooksScheduledScanRouteImport.update({
+    id: '/api/public/hooks/scheduled-scan',
+    path: '/api/public/hooks/scheduled-scan',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/public/hooks/scheduled-scan': typeof ApiPublicHooksScheduledScanRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/public/hooks/scheduled-scan': typeof ApiPublicHooksScheduledScanRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/public/hooks/scheduled-scan': typeof ApiPublicHooksScheduledScanRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/public/hooks/scheduled-scan'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/public/hooks/scheduled-scan'
+  id: '__root__' | '/' | '/api/public/hooks/scheduled-scan'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiPublicHooksScheduledScanRoute: typeof ApiPublicHooksScheduledScanRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +59,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/scheduled-scan': {
+      id: '/api/public/hooks/scheduled-scan'
+      path: '/api/public/hooks/scheduled-scan'
+      fullPath: '/api/public/hooks/scheduled-scan'
+      preLoaderRoute: typeof ApiPublicHooksScheduledScanRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiPublicHooksScheduledScanRoute: ApiPublicHooksScheduledScanRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
