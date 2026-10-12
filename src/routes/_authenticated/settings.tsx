@@ -63,7 +63,7 @@ function SettingsPage() {
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", s.data.user_id);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     qc.invalidateQueries({ queryKey: ["settings"] });
     toast.success("Saved");
   }

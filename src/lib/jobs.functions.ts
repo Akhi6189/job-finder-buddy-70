@@ -97,7 +97,7 @@ export const importFromSheet = createServerFn({ method: "POST" })
     if (!res.ok) throw new Error(`Google Sheets error [${res.status}]: ${(await res.text()).slice(0, 200)}`);
     const values: string[][] = ((await res.json()) as any).values ?? [];
     if (!values.length) return { tracked: 0, created: 0 };
-    const head = values[0].map((h) => String(h ?? "").toLowerCase());
+    const head = values[0]!.map((h) => String(h ?? "").toLowerCase());
     let nameCol = head.findIndex((h) => h.includes("company") || h === "name");
     const urlCol = head.findIndex((h) => /career|link|url|website/.test(h));
     const hasHeader = nameCol >= 0;
