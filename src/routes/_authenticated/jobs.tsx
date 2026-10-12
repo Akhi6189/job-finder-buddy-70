@@ -77,7 +77,14 @@ function JobsPage() {
       setProgress({ done: i, total: tracked.length, name });
       const r = await scan({ data: { trackedId: tracked[i]!.id } }).catch((e) => ({ ok: false as const, error: String(e) }));
       if (r.ok) added += r.added;
-      else failed.push(name);
+      else {
+        failed.push(name);
+        if (/out of credits|\b402\b/i.test(r.error)) {
+          setProgress(null);
+          toast.error("Scan stopped: the web reader is out of credits. Top up credits, then press Scan now again.");
+          return;
+        }
+      }
       qc.invalidateQueries({ queryKey: ["jobs"] });
     }
     setProgress(null);
