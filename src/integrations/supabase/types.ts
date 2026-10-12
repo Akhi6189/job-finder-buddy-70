@@ -50,6 +50,7 @@ export type Database = {
       jobs: {
         Row: {
           applied_at: string | null
+          closed_at: string | null
           company_id: string
           description: string | null
           experience: string | null
@@ -68,6 +69,7 @@ export type Database = {
         }
         Insert: {
           applied_at?: string | null
+          closed_at?: string | null
           company_id: string
           description?: string | null
           experience?: string | null
@@ -86,6 +88,7 @@ export type Database = {
         }
         Update: {
           applied_at?: string | null
+          closed_at?: string | null
           company_id?: string
           description?: string | null
           experience?: string | null

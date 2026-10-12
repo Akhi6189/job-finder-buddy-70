@@ -51,8 +51,9 @@ function JobsPage() {
 
   const list = useMemo(() => {
     let l = jobs.data ?? [];
-    if (tab === "open") l = l.filter((j) => j.status !== "applied");
+    if (tab === "open") l = l.filter((j) => j.status !== "applied" && !j.closed_at);
     if (tab === "applied") l = l.filter((j) => j.status === "applied");
+    if (tab === "closed") l = l.filter((j) => j.status !== "applied" && !!j.closed_at);
     if (q) {
       const s = q.toLowerCase();
       l = l.filter((j) => j.title.toLowerCase().includes(s) || j.companies?.name.toLowerCase().includes(s));
@@ -61,8 +62,9 @@ function JobsPage() {
   }, [jobs.data, tab, q]);
 
   const counts = {
-    open: (jobs.data ?? []).filter((j) => j.status !== "applied").length,
+    open: (jobs.data ?? []).filter((j) => j.status !== "applied" && !j.closed_at).length,
     applied: (jobs.data ?? []).filter((j) => j.status === "applied").length,
+    closed: (jobs.data ?? []).filter((j) => j.status !== "applied" && !!j.closed_at).length,
   };
 
   async function scanAll() {
@@ -110,6 +112,7 @@ function JobsPage() {
           <TabsList>
             <TabsTrigger value="open">Not applied ({counts.open})</TabsTrigger>
             <TabsTrigger value="applied">Applied ({counts.applied})</TabsTrigger>
+            <TabsTrigger value="closed">No longer available ({counts.closed})</TabsTrigger>
             <TabsTrigger value="all">All</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -131,7 +134,7 @@ function JobsPage() {
             <button
               key={j.id}
               onClick={() => setSelected(j)}
-              className="flex items-center gap-3 rounded-xl border bg-card p-3.5 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift"
+              className={`flex items-center gap-3 rounded-xl border bg-card p-3.5 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift ${j.closed_at ? "opacity-70" : ""}`}
             >
               {j.status === "applied" ? (
                 <div className="flex h-[52px] w-[52px] shrink-0 flex-col items-center justify-center rounded-full bg-success/15 text-success">
@@ -144,11 +147,14 @@ function JobsPage() {
               <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold">{j.title}</div>
                 <div className="truncate text-sm text-muted-foreground">{j.companies?.name}</div>
-                <div className="mt-1 flex items-center gap-2">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
                   {j.status === "applied" ? (
                     <Badge className="bg-success/15 text-success hover:bg-success/15">Applied</Badge>
                   ) : (
                     <Badge variant="secondary">Not applied</Badge>
+                  )}
+                  {j.closed_at && (
+                    <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/10">No longer available</Badge>
                   )}
                   {j.location && <span className="truncate text-xs text-muted-foreground">{j.location}</span>}
                 </div>
@@ -210,6 +216,11 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
               <span>Found {daysSince(job.first_seen_at)}d ago</span>
             </div>
 
+            {job.closed_at && (
+              <div className="mx-4 mt-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                No longer on the careers page (not seen since {new Date(job.last_seen_at).toLocaleDateString()}).
+              </div>
+            )}
             <div className="mx-4 mt-5 flex items-center gap-4 rounded-xl border bg-muted/40 p-4">
               {job.status === "applied" ? (
                 <div>
