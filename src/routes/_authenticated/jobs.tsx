@@ -67,13 +67,13 @@ function JobsPage() {
 
   async function scanAll() {
     const { data: tracked } = await supabase.from("tracked_companies").select("id, companies(name)");
-    if (!tracked?.length) return toast.info("Add some companies first.");
+    if (!tracked?.length) { toast.info("Add some companies first."); return; }
     let added = 0;
     const failed: string[] = [];
     for (let i = 0; i < tracked.length; i++) {
-      const name = (tracked[i].companies as any)?.name ?? "";
+      const name = (tracked[i]!.companies as any)?.name ?? "";
       setProgress({ done: i, total: tracked.length, name });
-      const r = await scan({ data: { trackedId: tracked[i].id } }).catch((e) => ({ ok: false as const, error: String(e) }));
+      const r = await scan({ data: { trackedId: tracked[i]!.id } }).catch((e) => ({ ok: false as const, error: String(e) }));
       if (r.ok) added += r.added;
       else failed.push(name);
       qc.invalidateQueries({ queryKey: ["jobs"] });
@@ -172,7 +172,7 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
     if (!job) return;
     const patch = applied ? { status: "applied", applied_at: new Date().toISOString() } : { status: "open", applied_at: null };
     const { error } = await supabase.from("jobs").update(patch).eq("id", job.id);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     onChange({ ...job, ...patch });
     qc.invalidateQueries({ queryKey: ["jobs"] });
     toast.success(applied ? "Marked as applied" : "Moved back to not applied");

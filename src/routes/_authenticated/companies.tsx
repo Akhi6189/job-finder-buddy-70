@@ -61,7 +61,7 @@ function CompaniesPage() {
 
   async function track(c: Company) {
     const { error } = await supabase.from("tracked_companies").insert({ user_id: await getUserId(), company_id: c.id });
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     refresh();
   }
   async function untrack(id: string) {
@@ -206,7 +206,7 @@ function CompanyDialog({ value, onClose, onSaved }: { value: Company | "new" | n
   async function save() {
     if (!name.trim()) return;
     const careers_url = url.trim() || null;
-    if (careers_url && !/^https?:\/\//.test(careers_url)) return toast.error("Link must start with http:// or https://");
+    if (careers_url && !/^https?:\/\//.test(careers_url)) { toast.error("Link must start with http:// or https://"); return; }
     if (isNew) {
       const uid = await getUserId();
       const { data, error } = await supabase
@@ -214,11 +214,11 @@ function CompanyDialog({ value, onClose, onSaved }: { value: Company | "new" | n
         .insert({ name: name.trim(), careers_url, category: "Added by me", created_by: uid })
         .select("id")
         .single();
-      if (error) return toast.error(error.code === "23505" ? "That company already exists — search for it." : error.message);
+      if (error) { toast.error(error.code === "23505" ? "That company already exists — search for it." : error.message); return; }
       await supabase.from("tracked_companies").insert({ user_id: uid, company_id: data.id });
     } else if (c) {
       const { error } = await supabase.from("companies").update({ careers_url }).eq("id", c.id);
-      if (error) return toast.error(error.message);
+      if (error) { toast.error(error.message); return; }
     }
     onSaved();
     onClose();
