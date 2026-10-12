@@ -237,7 +237,11 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
       const known = new Set((existing ?? []).map((e) => e.url));
       const fresh = found.filter((f) => !known.has(f.url));
       if (known.size)
-        await db.from("jobs").update({ last_seen_at: now }).eq("user_id", userId).in("url", [...known]);
+        await db
+          .from("jobs")
+          .update({ last_seen_at: now, closed_at: null })
+          .eq("user_id", userId)
+          .in("url", [...known]);
       if (fresh.length) {
         let scores: Score[] = [];
         try {
