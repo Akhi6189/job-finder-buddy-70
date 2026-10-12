@@ -271,6 +271,16 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
         added = rows.length;
       }
     }
+    // Roles we saw before that are no longer on the careers page are marked as closed.
+    const foundUrls = new Set(found.map((f) => f.url));
+    const { data: stillOpen } = await db
+      .from("jobs")
+      .select("id, url")
+      .eq("user_id", userId)
+      .eq("company_id", company.id)
+      .is("closed_at", null);
+    const goneIds = (stillOpen ?? []).filter((j) => !foundUrls.has(j.url)).map((j) => j.id);
+    if (goneIds.length) await db.from("jobs").update({ closed_at: now }).in("id", goneIds);
     await db.from("tracked_companies").update({ last_checked_at: now, last_error: null }).eq("id", trackedId);
     return { found: found.length, added };
   } catch (e) {
