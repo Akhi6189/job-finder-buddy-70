@@ -8,6 +8,13 @@
       "when": 1791722552426,
       "tag": "0000_job_tracker",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791788977938,
+      "tag": "0001_migration",
+      "breakpoints": true
     }
   ]
 }
