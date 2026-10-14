@@ -5,7 +5,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { ExternalLink, MapPin, RefreshCw, CheckCircle2, Undo2, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { daysSince, type Job } from "@/lib/data";
+import { daysSince, isRemote, type Job } from "@/lib/data";
 import { scanCompany, rescoreJob } from "@/lib/jobs.functions";
 import { ScoreRing } from "@/components/ScoreRing";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,8 @@ function JobsPage() {
   const scan = useServerFn(scanCompany);
   const [tab, setTab] = useState("open");
   const [q, setQ] = useState("");
+  const [loc, setLoc] = useState("");
+  const [remoteOnly, setRemoteOnly] = useState(false);
   const [selected, setSelected] = useState<Job | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(null);
 
@@ -50,21 +52,25 @@ function JobsPage() {
   });
 
   const list = useMemo(() => {
-    let l = jobs.data ?? [];
-    if (tab === "open") l = l.filter((j) => j.status !== "applied" && !j.closed_at);
+    // Only roles still live on the careers page are shown (applied ones are kept for tracking).
+    let l = (jobs.data ?? []).filter((j) => !j.closed_at || j.status === "applied");
+    if (tab === "open") l = l.filter((j) => j.status !== "applied");
     if (tab === "applied") l = l.filter((j) => j.status === "applied");
-    if (tab === "closed") l = l.filter((j) => j.status !== "applied" && !!j.closed_at);
+    if (loc.trim()) {
+      const s = loc.trim().toLowerCase();
+      l = l.filter((j) => (j.location ?? "").toLowerCase().includes(s));
+    }
+    if (remoteOnly) l = l.filter(isRemote);
     if (q) {
       const s = q.toLowerCase();
       l = l.filter((j) => j.title.toLowerCase().includes(s) || j.companies?.name.toLowerCase().includes(s));
     }
     return tab === "open" ? [...l].sort((a, b) => (b.score ?? -1) - (a.score ?? -1)) : l;
-  }, [jobs.data, tab, q]);
+  }, [jobs.data, tab, q, loc, remoteOnly]);
 
   const counts = {
     open: (jobs.data ?? []).filter((j) => j.status !== "applied" && !j.closed_at).length,
     applied: (jobs.data ?? []).filter((j) => j.status === "applied").length,
-    closed: (jobs.data ?? []).filter((j) => j.status !== "applied" && !!j.closed_at).length,
   };
 
   async function scanAll() {
@@ -119,11 +125,14 @@ function JobsPage() {
           <TabsList>
             <TabsTrigger value="open">Not applied ({counts.open})</TabsTrigger>
             <TabsTrigger value="applied">Applied ({counts.applied})</TabsTrigger>
-            <TabsTrigger value="closed">No longer available ({counts.closed})</TabsTrigger>
             <TabsTrigger value="all">All</TabsTrigger>
           </TabsList>
         </Tabs>
         <Input placeholder="Search role or company" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-xs bg-card" />
+        <Input placeholder="Location, e.g. Bengaluru" value={loc} onChange={(e) => setLoc(e.target.value)} className="max-w-[200px] bg-card" />
+        <Button variant={remoteOnly ? "ink" : "outline"} size="sm" onClick={() => setRemoteOnly((v) => !v)}>
+          {remoteOnly ? "✓ " : ""}Remote only
+        </Button>
       </div>
 
       {jobs.isLoading ? (
@@ -163,6 +172,7 @@ function JobsPage() {
                   {j.closed_at && (
                     <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/10">No longer available</Badge>
                   )}
+                  {isRemote(j) && <Badge variant="outline">Remote</Badge>}
                   {j.location && <span className="truncate text-xs text-muted-foreground">{j.location}</span>}
                 </div>
               </div>

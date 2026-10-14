@@ -24,3 +24,8 @@ export async function loadSettings(): Promise<Settings> {
 export function daysSince(iso: string) {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
 }
+
+/** A role counts as remote when its location or description mentions remote / work from home. */
+export function isRemote(j: { location: string | null; description?: string | null }) {
+  return /remote|work from home|\bwfh\b|anywhere/i.test(`${j.location ?? ""} ${j.description ?? ""}`);
+}
