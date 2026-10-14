@@ -1,0 +1,6 @@
+{
+  "appId": "app.roleradar.jobs",
+  "appName": "RoleRadar",
+  "webDir": "public",
+  "server": { "url": "https://job-finder-buddy-70.lovable.app", "cleartext": false }
+}
