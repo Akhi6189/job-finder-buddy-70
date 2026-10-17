@@ -33,24 +33,50 @@ export const rescoreJob = createServerFn({ method: "POST" })
     return r;
   });
 
+// Helper to check if a URL is likely a specific career page vs just a main home page
+function isCareerUrl(url: string | undefined): boolean {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  return /\b(career|careers|jobs|job|join|work|workat|openings|positions)\b/i.test(url);
+}
+
+// Helper to formulate a career URL if only domain or blank is provided
+async function findCareerPage(companyName: string, domainUrl?: string): Promise<string | undefined> {
+  if (domainUrl && /^https?:\/\//i.test(domainUrl)) {
+    const cleanUrl = domainUrl.replace(/\/+$/, "");
+    return `${cleanUrl}/careers`;
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(companyName + " careers")}`;
+}
+
 const rowsSchema = z
-  .array(z.object({ name: z.string().trim().min(1).max(120), careers_url: z.string().url().max(500).optional() }))
+  .array(
+    z.object({
+      name: z.string().trim().min(1).max(120),
+      careers_url: z.string().url().max(500).optional(),
+    })
+  )
   .max(500);
 
 async function importRows(db: any, userId: string, rows: z.infer<typeof rowsSchema>) {
   const { data: all } = await db.from("companies").select("id, name, careers_url");
   const byName = new Map<string, { id: string; careers_url: string | null }>(
-    (all ?? []).map((c: any) => [c.name.toLowerCase(), c]),
+    (all ?? []).map((c: any) => [c.name.toLowerCase(), c])
   );
   let created = 0;
   const ids: string[] = [];
+
   for (const r of rows) {
     const key = r.name.toLowerCase();
     let c = byName.get(key);
     if (!c) {
       const { data: ins, error } = await db
         .from("companies")
-        .insert({ name: r.name, careers_url: r.careers_url ?? null, category: "Added by me", created_by: userId })
+        .insert({
+          name: r.name,
+          careers_url: r.careers_url ?? null,
+          category: "Added by me",
+          created_by: userId,
+        })
         .select("id, careers_url")
         .single();
       if (error) continue;
@@ -62,53 +88,98 @@ async function importRows(db: any, userId: string, rows: z.infer<typeof rowsSche
     }
     if (c) ids.push(c.id);
   }
+
   const unique = [...new Set(ids)];
-  if (unique.length)
-    await db
-      .from("tracked_companies")
-      .upsert(unique.map((company_id) => ({ user_id: userId, company_id })), {
+  if (unique.length) {
+    await db.from("tracked_companies").upsert(
+      unique.map((company_id) => ({ user_id: userId, company_id })),
+      {
         onConflict: "user_id,company_id",
         ignoreDuplicates: true,
-      });
+      }
+    );
+  }
   return { tracked: unique.length, created };
 }
 
 export const importCompanies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => z.object({ rows: rowsSchema }).parse(d))
-  .handler(async ({ data, context }) => importRows(context.supabase, context.userId, data.rows));
-
-export const importFromSheet = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((d) => z.object({ url: z.string().url().max(500) }).parse(d))
   .handler(async ({ data, context }) => {
-    const m = data.url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    if (!m) throw new Error("That doesn't look like a Google Sheets link");
-    const lovable = process.env["LOVABLE_API_KEY"];
-    const sheetsKey = process.env["GOOGLE_SHEETS_API_KEY"];
-    if (!lovable || !sheetsKey) throw new Error("Google Sheets is not connected");
-    const headers = { Authorization: `Bearer ${lovable}`, "X-Connection-Api-Key": sheetsKey };
-    const base = `https://connector-gateway.lovable.dev/google_sheets/v4/spreadsheets/${m[1]}`;
-    const meta = await fetch(`${base}?fields=sheets.properties.title`, { headers });
-    if (!meta.ok) throw new Error(`Google Sheets error [${meta.status}]: ${(await meta.text()).slice(0, 200)}`);
-    const title = ((await meta.json()) as any).sheets?.[0]?.properties?.title ?? "Sheet1";
-    const range = `'${title.replace(/'/g, "''")}'!A1:Z1000`;
-    const res = await fetch(`${base}/values/${range}`, { headers });
-    if (!res.ok) throw new Error(`Google Sheets error [${res.status}]: ${(await res.text()).slice(0, 200)}`);
-    const values: string[][] = ((await res.json()) as any).values ?? [];
-    if (!values.length) return { tracked: 0, created: 0 };
-    const head = values[0]!.map((h) => String(h ?? "").toLowerCase());
-    let nameCol = head.findIndex((h) => h.includes("company") || h === "name");
-    const urlCol = head.findIndex((h) => /career|link|url|website/.test(h));
-    const hasHeader = nameCol >= 0;
-    if (nameCol < 0) nameCol = 0;
-    const rows = values
-      .slice(hasHeader ? 1 : 0)
-      .map((r) => {
-        const name = String(r[nameCol] ?? "").trim();
-        const u = urlCol >= 0 ? String(r[urlCol] ?? "").trim() : "";
-        return { name, careers_url: /^https?:\/\//.test(u) ? u : undefined };
+    const sheetMatch = data.url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (!sheetMatch) throw new Error("That doesn't look like a valid Google Sheets link");
+    const spreadsheetId = sheetMatch[1];
+
+    const gidMatch = data.url.match(/[?&#]gid=([0-9]+)/);
+    const gid = gidMatch ? gidMatch[1] : "0";
+
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
+
+    const res = await fetch(csvUrl);
+    if (!res.ok) {
+      throw new Error("Could not fetch the sheet. Make sure sharing is set to 'Anyone with the link can view'.");
+    }
+
+    const csvText = await res.text();
+
+    const parseCsvLine = (line: string): string[] => {
+      const result: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"' && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    };
+
+    const lines = csvText
+      .split(/\r?\n/)
+      .filter((l) => l.trim().length > 0)
+      .map(parseCsvLine);
+
+    if (lines.length < 3) return { tracked: 0, created: 0 };
+
+    // Explicitly target Row 3 onwards (index 2), Column A (index 0) for names, Column B (index 1) for links
+    const dataRows = lines.slice(2);
+
+    const parsedRows = await Promise.all(
+      dataRows.map(async (r) => {
+        const name = String(r[0] ?? "").trim();
+        const rawLink = String(r[1] ?? "").trim();
+
+        if (!name || name.length === 0) return null;
+
+        let finalCareerUrl: string | undefined;
+
+        if (isCareerUrl(rawLink)) {
+          finalCareerUrl = rawLink;
+        } else {
+          finalCareerUrl = await findCareerPage(name, /^https?:\/\//i.test(rawLink) ? rawLink : undefined);
+        }
+
+        return {
+          name,
+          careers_url: finalCareerUrl && /^https?:\/\//i.test(finalCareerUrl) ? finalCareerUrl : undefined,
+        };
       })
-      .filter((r) => r.name);
-    return importRows(context.supabase, context.userId, rowsSchema.parse(rows.slice(0, 500)));
+    );
+
+    const validRows = parsedRows.filter((r): r is { name: string; careers_url?: string } => r !== null);
+
+    return importRows(context.supabase, context.userId, rowsSchema.parse(validRows.slice(0, 500)));
   });
+
+// Export aliases to satisfy both import naming conventions across files
+export const importFromSheet = importCompanies;

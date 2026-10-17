@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">RoleRadar</string>
+    <string name="title_activity_main">RoleRadar</string>
+    <string name="package_name">app.roleradar.jobs</string>
+    <string name="custom_url_scheme">app.roleradar.jobs</string>
+</resources>
