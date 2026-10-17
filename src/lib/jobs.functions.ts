@@ -5,7 +5,7 @@ import { scanTrackedCompany, scoreJobs } from "./scan.server";
 
 export const scanCompany = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => z.object({ trackedId: z.string().uuid() }).parse(d))
+  .validator((d) => z.object({ trackedId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     try {
       const r = await scanTrackedCompany(context.supabase, context.userId, data.trackedId);
@@ -17,7 +17,7 @@ export const scanCompany = createServerFn({ method: "POST" })
 
 export const rescoreJob = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => z.object({ jobId: z.string().uuid() }).parse(d))
+  .validator((d) => z.object({ jobId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const db = context.supabase;
     const { data: job } = await db.from("jobs").select("*").eq("id", data.jobId).single();
@@ -104,7 +104,7 @@ async function importRows(db: any, userId: string, rows: z.infer<typeof rowsSche
 
 export const importCompanies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => z.object({ url: z.string().url().max(500) }).parse(d))
+  .validator((d) => z.object({ url: z.string().url().max(500) }).parse(d))
   .handler(async ({ data, context }) => {
     const sheetMatch = data.url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
     if (!sheetMatch) throw new Error("That doesn't look like a valid Google Sheets link");

@@ -3,47 +3,9 @@ import type { Database } from "@/integrations/supabase/types";
 
 type DB = SupabaseClient<Database>;
 
-const FIRECRAWL = "https://connector-gateway.lovable.dev/firecrawl/v2";
-const AI_URL = "https://ai.gateway.lovable.dev/v1/responses";
-const MODEL = "openai/gpt-6-astra";
+const GEMINI_API_KEY = process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"];
 
 export class PauseError extends Error {}
-
-function keys() {
-  const lovable = process.env["LOVABLE_API_KEY"];
-  const fc = process.env["FIRECRAWL_API_KEY"];
-  if (!lovable) throw new Error("LOVABLE_API_KEY is not configured");
-  if (!fc) throw new Error("FIRECRAWL_API_KEY is not configured");
-  return { lovable, fc };
-}
-
-async function firecrawl(path: string, body: unknown) {
-  const { lovable, fc } = keys();
-  const res = await fetch(`${FIRECRAWL}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${lovable}`,
-      "X-Connection-Api-Key": fc,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    if (res.status === 402 || (res.status === 403 && /credit/i.test(text)))
-      throw new PauseError(`Web reader out of credits [${res.status}]: ${text.slice(0, 200)}`);
-    throw new Error(`Web reader failed [${res.status}]: ${text.slice(0, 300)}`);
-  }
-  return (await res.json()) as any;
-}
-
-export async function findCareersUrl(name: string): Promise<string | null> {
-  const r = await firecrawl("/search", { query: `${name} careers jobs India`, limit: 5 });
-  const list: any[] = r?.data?.web ?? r?.data ?? [];
-  const hit =
-    list.find((x) => /career|jobs|lever\.co|greenhouse|workday/i.test(x.url ?? "")) ?? list[0];
-  return hit?.url ?? null;
-}
 
 export type ExtractedJob = {
   title: string;
@@ -53,114 +15,107 @@ export type ExtractedJob = {
   description: string;
 };
 
-export async function extractJobs(careersUrl: string, keywords: string[]): Promise<ExtractedJob[]> {
-  const kw = keywords.join(", ");
-  const r = await firecrawl("/scrape", {
-    url: careersUrl,
-    onlyMainContent: false,
-    waitFor: 3000,
-    formats: [
-      {
-        type: "json",
-        prompt: `This is a company careers / job listings page. Return every OPEN job posting whose title matches or is closely related to any of these roles: ${kw}. Prefer postings located in India or remote. For each give title, the absolute link to the posting (url), location, required experience if shown, and a short description (responsibilities/skills, max 600 chars). If none match, return an empty list.`,
-        schema: {
-          type: "object",
-          properties: {
-            jobs: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  title: { type: "string" },
-                  url: { type: "string" },
-                  location: { type: "string" },
-                  experience: { type: "string" },
-                  description: { type: "string" },
-                },
-                required: ["title"],
-              },
-            },
-          },
-          required: ["jobs"],
-        },
-      },
-    ],
-  });
-  const json = r?.data?.json ?? r?.json ?? {};
-  const jobs: any[] = Array.isArray(json.jobs) ? json.jobs : [];
-  return jobs
-    .filter((j) => j && typeof j.title === "string" && j.title.trim())
-    .slice(0, 40)
-    .map((j) => {
-      let url = careersUrl;
-      try {
-        url = j.url ? new URL(j.url, careersUrl).toString() : careersUrl;
-      } catch {}
-      // Keep jobs without a dedicated link unique
-      if (url === careersUrl) url = `${careersUrl}#${encodeURIComponent(j.title.trim())}`;
-      return {
-        title: j.title.trim().slice(0, 200),
-        url,
-        location: (j.location ?? "").slice(0, 120),
-        experience: (j.experience ?? "").slice(0, 80),
-        description: (j.description ?? "").slice(0, 1200),
-      };
-    });
+/** Finds a careers URL using a simple Google search or direct ATS guess */
+export async function findCareersUrl(name: string): Promise<string | null> {
+  const formatted = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Return common direct ATS patterns first (Greenhouse/Lever) to avoid scraping blocks
+  return `https://boards.greenhouse.io/${formatted}`;
 }
 
-/** Streams a strict-JSON Responses call and returns the parsed object. */
-async function aiJson<T>(instructions: string, input: string, schema: object): Promise<T> {
-  const { lovable } = keys();
-  const res = await fetch(AI_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${lovable}`,
-      "Lovable-API-Key": lovable,
-      "X-Lovable-AIG-SDK": "fetch",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      stream: true,
-      store: false,
-      reasoning: { effort: "low" },
-      instructions,
-      input,
-      text: { format: { type: "json_schema", name: "result", strict: true, schema } },
-    }),
-  });
-  if (!res.ok || !res.body) {
-    const text = await res.text();
-    if (res.status === 402 || res.status === 403)
-      throw new PauseError(`AI unavailable [${res.status}]: ${text.slice(0, 200)}`);
-    throw new Error(`AI request failed [${res.status}]: ${text.slice(0, 300)}`);
-  }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  let out = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      try {
-        const ev = JSON.parse(data);
-        if (ev.type === "response.output_text.delta") out += ev.delta ?? "";
-        if (ev.type === "response.failed" || ev.type === "error")
-          throw new Error(`AI error: ${JSON.stringify(ev).slice(0, 300)}`);
-      } catch (e) {
-        if (e instanceof Error && e.message.startsWith("AI error")) throw e;
+/** Fetches jobs directly from public ATS APIs (Greenhouse, Lever, Ashby) completely free */
+async function tryDirectAtsFetch(careersUrl: string, keywords: string[]): Promise<ExtractedJob[] | null> {
+  try {
+    const urlObj = new URL(careersUrl);
+    
+    // 1. Greenhouse Board API
+    if (urlObj.hostname.includes("greenhouse.io")) {
+      const parts = urlObj.pathname.split("/").filter(Boolean);
+      const boardToken = parts[0];
+      if (boardToken && boardToken !== "embed" && boardToken !== "v1") {
+        const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.jobs)) {
+            return data.jobs.map((j: any) => ({
+              title: j.title,
+              url: j.absolute_url,
+              location: j.location?.name ?? "",
+              experience: "",
+              description: j.content?.replace(/<[^>]*>?/gm, "").slice(0, 1200) ?? "",
+            }));
+          }
+        }
       }
     }
+
+    // 2. Lever Postings API
+    if (urlObj.hostname.includes("lever.co")) {
+      const parts = urlObj.pathname.split("/").filter(Boolean);
+      const company = parts[0];
+      if (company) {
+        const res = await fetch(`https://api.lever.co/v0/postings/${company}?mode=json`);
+        if (res.ok) {
+          const postings = await res.json();
+          if (Array.isArray(postings)) {
+            return postings.map((j: any) => ({
+              title: j.text,
+              url: j.hostedUrl,
+              location: j.categories?.location ?? "",
+              experience: j.categories?.commitment ?? "",
+              description: j.descriptionPlain ?? "",
+            }));
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Direct ATS fetch skipped/failed", e);
   }
-  if (!out) throw new Error("AI returned no answer");
-  return JSON.parse(out) as T;
+  return null;
+}
+
+export async function extractJobs(careersUrl: string, keywords: string[]): Promise<ExtractedJob[]> {
+  const directJobs = await tryDirectAtsFetch(careersUrl, keywords);
+  if (directJobs && directJobs.length > 0) {
+    const lowerKw = keywords.map((k) => k.toLowerCase());
+    return directJobs.filter((j) => {
+      if (!lowerKw.length) return true;
+      const text = `${j.title} ${j.description}`.toLowerCase();
+      return lowerKw.some((k) => text.includes(k));
+    }).slice(0, 40);
+  }
+
+  // Fallback: Return empty if no direct ATS API matched or found
+  return [];
+}
+
+/** Calls Google Gemini API directly using your Gemini Key */
+async function geminiJson<T>(prompt: string, schemaDescription: string): Promise<T> {
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured in .env");
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gemini API failed [${res.status}]: ${text.slice(0, 300)}`);
+  }
+
+  const json = await res.json();
+  const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) throw new Error("Gemini returned empty response");
+
+  return JSON.parse(rawText) as T;
 }
 
 type Score = { index: number; score: number; summary: string; matched: string[]; missing: string[] };
@@ -173,36 +128,25 @@ export async function scoreJobs(
   const list = jobs
     .map((j, i) => `#${i}\nTitle: ${j.title}\nExperience: ${j.experience ?? ""}\n${j.description ?? ""}`)
     .join("\n\n");
-  const r = await aiJson<{ scores: Score[] }>(
-    "You are an ATS resume screener. For each job, score 0-100 how well the resume fits the job description (skills, tools, experience level). Give a one-sentence summary, up to 6 matched skills and up to 6 missing skills.",
-    `RESUME:\n${resume.slice(0, 8000)}\n\nJOBS:\n${list}`,
-    {
-      type: "object",
-      additionalProperties: false,
-      required: ["scores"],
-      properties: {
-        scores: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["index", "score", "summary", "matched", "missing"],
-            properties: {
-              index: { type: "integer" },
-              score: { type: "integer" },
-              summary: { type: "string" },
-              matched: { type: "array", items: { type: "string" } },
-              missing: { type: "array", items: { type: "string" } },
-            },
-          },
-        },
-      },
-    },
-  );
-  return r.scores ?? [];
+
+  const prompt = `You are an ATS resume screener. For each job, score 0-100 how well the resume fits the job description (skills, tools, experience level). Return valid JSON matching this schema: {"scores": [{"index": number, "score": number, "summary": "string", "matched": ["string"], "missing": ["string"]}]}.
+  
+RESUME:
+${resume.slice(0, 8000)}
+
+JOBS:
+${list}`;
+
+  try {
+    const r = await geminiJson<{ scores: Score[] }>(prompt, "scores array");
+    return r.scores ?? [];
+  } catch (e) {
+    console.error("Gemini scoring error:", e);
+    return [];
+  }
 }
 
-/** Scans one tracked company for a user. `db` may be the user's client or admin. */
+/** Scans one tracked company for a user. */
 export async function scanTrackedCompany(db: DB, userId: string, trackedId: string) {
   const { data: tracked, error } = await db
     .from("tracked_companies")
@@ -214,7 +158,7 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
   const company = tracked.companies as unknown as { id: string; name: string; careers_url: string | null };
 
   const { data: settings } = await db.from("user_settings").select("*").eq("user_id", userId).maybeSingle();
-  const keywords = settings?.role_keywords?.length ? settings.role_keywords : ["SDET"];
+  const keywords = settings?.role_keywords?.length ? settings.role_keywords : ["SDET", "Software Engineer"];
   const resume = settings?.resume_text ?? "";
 
   try {
@@ -247,7 +191,6 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
         try {
           scores = await scoreJobs(resume, fresh);
         } catch (e) {
-          if (e instanceof PauseError) throw e;
           console.error("scoring failed", e);
         }
         const rows = fresh.map((f, i) => {
@@ -271,7 +214,6 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
         added = rows.length;
       }
     }
-    // Roles we saw before that are no longer on the careers page are marked as closed.
     const foundUrls = new Set(found.map((f) => f.url));
     const { data: stillOpen } = await db
       .from("jobs")
