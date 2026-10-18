@@ -10,10 +10,14 @@ export const Route = createFileRoute("/")({
       { title: "RoleRadar — find and track roles at your target companies" },
       {
         name: "description",
-        content: "Scan careers pages of your target companies for SDET and engineering roles, score your resume, and track applications.",
+        content:
+          "Scan careers pages of your target companies for SDET and engineering roles, score your resume, and track applications.",
       },
       { property: "og:title", content: "RoleRadar — job application tracker" },
-      { property: "og:description", content: "Scan careers pages, score your resume, track every application." },
+      {
+        property: "og:description",
+        content: "Scan careers pages, score your resume, track every application.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -30,10 +34,22 @@ function Index() {
   }, [navigate]);
 
   const features = [
-    { icon: Building2, t: "Your company list", d: "Pick from the built-in list, import a Google Sheet, or add your own." },
-    { icon: Radar, t: "Careers pages scanned", d: "Finds SDET or any roles you choose, right from each careers site." },
+    {
+      icon: Building2,
+      t: "Your company list",
+      d: "Pick from the built-in list, import a Google Sheet, or add your own.",
+    },
+    {
+      icon: Radar,
+      t: "Careers pages scanned",
+      d: "Finds SDET or any roles you choose, right from each careers site.",
+    },
     { icon: Gauge, t: "Resume match score", d: "Each role is scored against your resume." },
-    { icon: Clock, t: "Runs on a schedule", d: "Checks at 9 AM and 5 PM India time, or whenever you choose." },
+    {
+      icon: Clock,
+      t: "Runs on a schedule",
+      d: "Checks at 9 AM and 5 PM India time, or whenever you choose.",
+    },
   ];
 
   return (
@@ -43,8 +59,8 @@ function Index() {
         Every open role at the companies <span className="text-primary">you</span> care about.
       </h1>
       <p className="mt-6 max-w-xl text-lg text-muted-foreground">
-        Add your target companies, tell it which roles to look for, and see what's open, how well you fit, and where
-        you've already applied.
+        Add your target companies, tell it which roles to look for, and see what's open, how well
+        you fit, and where you've already applied.
       </p>
       <div className="mt-8 flex gap-3">
         <Button asChild size="lg" variant="ink">

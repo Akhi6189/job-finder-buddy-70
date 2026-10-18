@@ -1,0 +1,6 @@
+{
+  "name": "RoleRadar",
+  "description": "Track open roles across your target companies and your applications.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

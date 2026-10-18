@@ -3,10 +3,19 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { ExternalLink, MapPin, RefreshCw, CheckCircle2, Undo2, Sparkles } from "lucide-react";
+import {
+  ExternalLink,
+  MapPin,
+  RefreshCw,
+  CheckCircle2,
+  Undo2,
+  Sparkles,
+  Bookmark,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { daysSince, isRemote, type Job } from "@/lib/data";
 import { scanCompany, rescoreJob } from "@/lib/jobs.functions";
+import { saveOrUpdateFromJob } from "@/lib/applications";
 import { ScoreRing } from "@/components/ScoreRing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +45,9 @@ function JobsPage() {
   const [loc, setLoc] = useState("");
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [selected, setSelected] = useState<Job | null>(null);
-  const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(
+    null,
+  );
 
   const jobs = useQuery({
     queryKey: ["jobs"],
@@ -63,7 +74,9 @@ function JobsPage() {
     if (remoteOnly) l = l.filter(isRemote);
     if (q) {
       const s = q.toLowerCase();
-      l = l.filter((j) => j.title.toLowerCase().includes(s) || j.companies?.name.toLowerCase().includes(s));
+      l = l.filter(
+        (j) => j.title.toLowerCase().includes(s) || j.companies?.name.toLowerCase().includes(s),
+      );
     }
     return tab === "open" ? [...l].sort((a, b) => (b.score ?? -1) - (a.score ?? -1)) : l;
   }, [jobs.data, tab, q, loc, remoteOnly]);
@@ -74,20 +87,30 @@ function JobsPage() {
   };
 
   async function scanAll() {
-    const { data: tracked } = await supabase.from("tracked_companies").select("id, companies(name)");
-    if (!tracked?.length) { toast.info("Add some companies first."); return; }
+    const { data: tracked } = await supabase
+      .from("tracked_companies")
+      .select("id, companies(name)");
+    if (!tracked?.length) {
+      toast.info("Add some companies first.");
+      return;
+    }
     let added = 0;
     const failed: string[] = [];
     for (let i = 0; i < tracked.length; i++) {
-      const name = (tracked[i]!.companies as any)?.name ?? "";
+      const name = (tracked[i]!.companies as { name?: string } | null)?.name ?? "";
       setProgress({ done: i, total: tracked.length, name });
-      const r = await scan({ data: { trackedId: tracked[i]!.id } }).catch((e) => ({ ok: false as const, error: String(e) }));
+      const r = await scan({ data: { trackedId: tracked[i]!.id } }).catch((e) => ({
+        ok: false as const,
+        error: String(e),
+      }));
       if (r.ok) added += r.added;
       else {
         failed.push(name);
         if (/out of credits|\b402\b/i.test(r.error)) {
           setProgress(null);
-          toast.error("Scan stopped: the web reader is out of credits. Top up credits, then press Scan now again.");
+          toast.error(
+            "Scan stopped: the web reader is out of credits. Top up credits, then press Scan now again.",
+          );
           return;
         }
       }
@@ -95,7 +118,9 @@ function JobsPage() {
     }
     setProgress(null);
     toast.success(`Scan finished: ${added} new role${added === 1 ? "" : "s"}.`, {
-      description: failed.length ? `Couldn't read: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}` : undefined,
+      description: failed.length
+        ? `Couldn't read: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`
+        : undefined,
     });
   }
 
@@ -115,7 +140,10 @@ function JobsPage() {
         <div className="mt-4 rounded-lg border bg-card p-3 text-sm">
           Reading careers page of <b>{progress.name}</b>…
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-primary transition-all" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
+            <div
+              className="h-full bg-primary transition-all"
+              style={{ width: `${(progress.done / progress.total) * 100}%` }}
+            />
           </div>
         </div>
       )}
@@ -128,9 +156,23 @@ function JobsPage() {
             <TabsTrigger value="all">All</TabsTrigger>
           </TabsList>
         </Tabs>
-        <Input placeholder="Search role or company" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-xs bg-card" />
-        <Input placeholder="Location, e.g. Bengaluru" value={loc} onChange={(e) => setLoc(e.target.value)} className="max-w-[200px] bg-card" />
-        <Button variant={remoteOnly ? "ink" : "outline"} size="sm" onClick={() => setRemoteOnly((v) => !v)}>
+        <Input
+          placeholder="Search role or company"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="max-w-xs bg-card"
+        />
+        <Input
+          placeholder="Location, e.g. Bengaluru"
+          value={loc}
+          onChange={(e) => setLoc(e.target.value)}
+          className="max-w-[200px] bg-card"
+        />
+        <Button
+          variant={remoteOnly ? "ink" : "outline"}
+          size="sm"
+          onClick={() => setRemoteOnly((v) => !v)}
+        >
           {remoteOnly ? "✓ " : ""}Remote only
         </Button>
       </div>
@@ -141,7 +183,11 @@ function JobsPage() {
         <div className="mt-10 rounded-xl border border-dashed bg-card p-10 text-center">
           <p className="font-semibold">No roles here yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Add companies on the <Link to="/companies" className="text-primary underline">Companies</Link> page, then press Scan now.
+            Add companies on the{" "}
+            <Link to="/companies" className="text-primary underline">
+              Companies
+            </Link>{" "}
+            page, then press Scan now.
           </p>
         </div>
       ) : (
@@ -154,7 +200,9 @@ function JobsPage() {
             >
               {j.status === "applied" ? (
                 <div className="flex h-[52px] w-[52px] shrink-0 flex-col items-center justify-center rounded-full bg-success/15 text-success">
-                  <span className="font-mono text-base font-semibold leading-none">{daysSince(j.applied_at!)}</span>
+                  <span className="font-mono text-base font-semibold leading-none">
+                    {daysSince(j.applied_at!)}
+                  </span>
                   <span className="text-[10px]">days</span>
                 </div>
               ) : (
@@ -165,15 +213,21 @@ function JobsPage() {
                 <div className="truncate text-sm text-muted-foreground">{j.companies?.name}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   {j.status === "applied" ? (
-                    <Badge className="bg-success/15 text-success hover:bg-success/15">Applied</Badge>
+                    <Badge className="bg-success/15 text-success hover:bg-success/15">
+                      Applied
+                    </Badge>
                   ) : (
                     <Badge variant="secondary">Not applied</Badge>
                   )}
                   {j.closed_at && (
-                    <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/10">No longer available</Badge>
+                    <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/10">
+                      No longer available
+                    </Badge>
                   )}
                   {isRemote(j) && <Badge variant="outline">Remote</Badge>}
-                  {j.location && <span className="truncate text-xs text-muted-foreground">{j.location}</span>}
+                  {j.location && (
+                    <span className="truncate text-xs text-muted-foreground">{j.location}</span>
+                  )}
                 </div>
               </div>
             </button>
@@ -186,19 +240,44 @@ function JobsPage() {
   );
 }
 
-function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => void; onChange: (j: Job) => void }) {
+function JobSheet({
+  job,
+  onClose,
+  onChange,
+}: {
+  job: Job | null;
+  onClose: () => void;
+  onChange: (j: Job) => void;
+}) {
   const qc = useQueryClient();
   const rescore = useServerFn(rescoreJob);
   const [busy, setBusy] = useState(false);
 
   async function setApplied(applied: boolean) {
     if (!job) return;
-    const patch = applied ? { status: "applied", applied_at: new Date().toISOString() } : { status: "open", applied_at: null };
+    const patch = applied
+      ? { status: "applied", applied_at: new Date().toISOString() }
+      : { status: "open", applied_at: null };
     const { error } = await supabase.from("jobs").update(patch).eq("id", job.id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     onChange({ ...job, ...patch });
     qc.invalidateQueries({ queryKey: ["jobs"] });
-    toast.success(applied ? "Marked as applied" : "Moved back to not applied");
+    if (applied) {
+      saveOrUpdateFromJob({
+        id: job.id,
+        title: job.title,
+        companyName: job.companies?.name || "Company",
+        url: job.url,
+        location: job.location,
+        score: job.score,
+        status: "applied",
+        appliedDate: new Date().toISOString().slice(0, 10),
+      });
+    }
+    toast.success(applied ? "Marked as applied & added to Tracker" : "Moved back to not applied");
   }
 
   async function doRescore() {
@@ -206,7 +285,13 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
     setBusy(true);
     try {
       const r = await rescore({ data: { jobId: job.id } });
-      onChange({ ...job, score: r.score, score_summary: r.summary, matched_skills: r.matched, missing_skills: r.missing });
+      onChange({
+        ...job,
+        score: r.score,
+        score_summary: r.summary,
+        matched_skills: r.matched,
+        missing_skills: r.missing,
+      });
       qc.invalidateQueries({ queryKey: ["jobs"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not score");
@@ -235,7 +320,8 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
 
             {job.closed_at && (
               <div className="mx-4 mt-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                No longer on the careers page (not seen since {new Date(job.last_seen_at).toLocaleDateString()}).
+                No longer on the careers page (not seen since{" "}
+                {new Date(job.last_seen_at).toLocaleDateString()}).
               </div>
             )}
             <div className="mx-4 mt-5 flex items-center gap-4 rounded-xl border bg-muted/40 p-4">
@@ -243,16 +329,28 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
                 <div>
                   <div className="label-mono">Applied</div>
                   <div className="text-2xl font-bold">{daysSince(job.applied_at!)} days ago</div>
-                  <div className="text-sm text-muted-foreground">{new Date(job.applied_at!).toLocaleDateString()}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {new Date(job.applied_at!).toLocaleDateString()}
+                  </div>
                 </div>
               ) : (
                 <>
                   <ScoreRing score={job.score} size={84} />
                   <div className="min-w-0">
                     <div className="label-mono">Resume match</div>
-                    <p className="text-sm">{job.score_summary ?? "Not scored yet. Add your resume in Settings, then score it."}</p>
-                    <Button size="sm" variant="ghost" className="mt-1 -ml-2" onClick={doRescore} disabled={busy}>
-                      <Sparkles /> {busy ? "Scoring…" : job.score == null ? "Score now" : "Re-score"}
+                    <p className="text-sm">
+                      {job.score_summary ??
+                        "Not scored yet. Add your resume in Settings, then score it."}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mt-1 -ml-2"
+                      onClick={doRescore}
+                      disabled={busy}
+                    >
+                      <Sparkles />{" "}
+                      {busy ? "Scoring…" : job.score == null ? "Score now" : "Re-score"}
                     </Button>
                   </div>
                 </>
@@ -269,7 +367,9 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
             {job.description && (
               <div className="mx-4 mt-5">
                 <div className="label-mono">About the role</div>
-                <p className="mt-1 whitespace-pre-line text-sm leading-relaxed">{job.description}</p>
+                <p className="mt-1 whitespace-pre-line text-sm leading-relaxed">
+                  {job.description}
+                </p>
               </div>
             )}
 
@@ -283,6 +383,23 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
                   <CheckCircle2 /> Mark as applied
                 </Button>
               )}
+              <Button
+                variant="outline"
+                onClick={() => {
+                  saveOrUpdateFromJob({
+                    id: job.id,
+                    title: job.title,
+                    companyName: job.companies?.name || "Company",
+                    url: job.url,
+                    location: job.location,
+                    score: job.score,
+                    status: "interested",
+                  });
+                  toast.success("Saved to My Applications!");
+                }}
+              >
+                <Bookmark className="h-4 w-4" /> Save to Applications
+              </Button>
               <Button variant="outline" asChild>
                 <a href={job.url} target="_blank" rel="noreferrer">
                   <ExternalLink /> View posting
@@ -296,14 +413,29 @@ function JobSheet({ job, onClose, onChange }: { job: Job | null; onClose: () => 
   );
 }
 
-function SkillList({ title, items, tone }: { title: string; items: string[] | null; tone: "success" | "destructive" }) {
+function SkillList({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: string[] | null;
+  tone: "success" | "destructive";
+}) {
   if (!items?.length) return null;
   return (
     <div>
       <div className="label-mono">{title}</div>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {items.map((s) => (
-          <span key={s} className={tone === "success" ? "rounded-md bg-success/12 px-2 py-0.5 text-xs text-success" : "rounded-md bg-destructive/10 px-2 py-0.5 text-xs text-destructive"}>
+          <span
+            key={s}
+            className={
+              tone === "success"
+                ? "rounded-md bg-success/12 px-2 py-0.5 text-xs text-success"
+                : "rounded-md bg-destructive/10 px-2 py-0.5 text-xs text-destructive"
+            }
+          >
             {s}
           </span>
         ))}

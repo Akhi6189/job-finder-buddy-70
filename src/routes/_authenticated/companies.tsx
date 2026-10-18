@@ -3,10 +3,20 @@ import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { Plus, Trash2, FileSpreadsheet, Upload, Check, Pencil, AlertTriangle } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  FileSpreadsheet,
+  Upload,
+  Check,
+  Pencil,
+  AlertTriangle,
+  ExternalLink,
+  Sparkles,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { getUserId, type Company, type Tracked } from "@/lib/data";
-import { importCompanies, importFromSheet } from "@/lib/jobs.functions";
+import { importCompanies, importFromSheet, locateCareersForCompany } from "@/lib/jobs.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +29,10 @@ export const Route = createFileRoute("/_authenticated/companies")({
       { title: "Companies — RoleRadar" },
       { name: "description", content: "Choose the companies RoleRadar watches for open roles." },
       { property: "og:title", content: "Companies — RoleRadar" },
-      { property: "og:description", content: "Choose the companies RoleRadar watches for open roles." },
+      {
+        property: "og:description",
+        content: "Choose the companies RoleRadar watches for open roles.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -31,6 +44,8 @@ function CompaniesPage() {
   const qc = useQueryClient();
   const importRows = useServerFn(importCompanies);
   const importSheet = useServerFn(importFromSheet);
+  const locateCareers = useServerFn(locateCareersForCompany);
+  const [locatingId, setLocatingId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [sheetUrl, setSheetUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,7 +59,12 @@ function CompaniesPage() {
   const tracked = useQuery({
     queryKey: ["tracked"],
     queryFn: async () =>
-      ((await supabase.from("tracked_companies").select("*, companies(*)").order("created_at", { ascending: false })).data ?? []) as Tracked[],
+      ((
+        await supabase
+          .from("tracked_companies")
+          .select("*, companies(*)")
+          .order("created_at", { ascending: false })
+      ).data ?? []) as Tracked[],
   });
   const trackedIds = new Set((tracked.data ?? []).map((t) => t.company_id));
 
@@ -60,8 +80,13 @@ function CompaniesPage() {
   };
 
   async function track(c: Company) {
-    const { error } = await supabase.from("tracked_companies").insert({ user_id: await getUserId(), company_id: c.id });
-    if (error) { toast.error(error.message); return; }
+    const { error } = await supabase
+      .from("tracked_companies")
+      .insert({ user_id: await getUserId(), company_id: c.id });
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     refresh();
   }
   async function untrack(id: string) {
@@ -73,7 +98,9 @@ function CompaniesPage() {
     setBusy(true);
     try {
       const r = await p;
-      toast.success(`${r.tracked} companies on your list${r.created ? ` (${r.created} new to the database)` : ""}.`);
+      toast.success(
+        `${r.tracked} companies on your list${r.created ? ` (${r.created} new to the database)` : ""}.`,
+      );
       refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Import failed");
@@ -83,7 +110,9 @@ function CompaniesPage() {
 
   async function onFile(f: File) {
     const text = await f.text();
-    const lines = text.split(/\r?\n/).map((l) => l.split(",").map((x) => x.trim().replace(/^"|"$/g, "")));
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.split(",").map((x) => x.trim().replace(/^"|"$/g, "")));
     const head = lines[0]?.map((h) => h.toLowerCase()) ?? [];
     let nc = head.findIndex((h) => h.includes("company") || h === "name");
     const uc = head.findIndex((h) => /career|link|url|website/.test(h));
@@ -91,7 +120,10 @@ function CompaniesPage() {
     if (nc < 0) nc = 0;
     const rows = lines
       .slice(hasHead ? 1 : 0)
-      .map((r) => ({ name: r[nc] ?? "", careers_url: /^https?:\/\//.test(r[uc] ?? "") ? r[uc] : undefined }))
+      .map((r) => ({
+        name: r[nc] ?? "",
+        careers_url: /^https?:\/\//.test(r[uc] ?? "") ? r[uc] : undefined,
+      }))
       .filter((r) => r.name)
       .slice(0, 500);
     runImport(importRows({ data: { rows } }));
@@ -109,7 +141,9 @@ function CompaniesPage() {
           </div>
           <div className="mt-3 divide-y rounded-xl border bg-card shadow-card">
             {(tracked.data ?? []).length === 0 && (
-              <p className="p-6 text-sm text-muted-foreground">Nothing yet. Search the database or import your Google Sheet.</p>
+              <p className="p-6 text-sm text-muted-foreground">
+                Nothing yet. Search the database or import your Google Sheet.
+              </p>
             )}
             {(tracked.data ?? []).map((t) => (
               <div key={t.id} className="flex items-center gap-3 p-3">
@@ -123,14 +157,66 @@ function CompaniesPage() {
                     )}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {t.companies?.careers_url ?? "No careers link — will search for it"}
-                    {t.last_checked_at && ` · checked ${new Date(t.last_checked_at).toLocaleString()}`}
+                    {t.companies?.careers_url ? (
+                      <a
+                        href={t.companies.careers_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                        title={t.companies.careers_url}
+                      >
+                        {t.companies.careers_url}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : (
+                      <span className="italic">No careers link — AI will locate upon scan</span>
+                    )}
+                    {t.last_checked_at &&
+                      ` · checked ${new Date(t.last_checked_at).toLocaleString()}`}
                   </div>
                 </div>
-                <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => t.companies && setEditing(t.companies)}>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  title="Locate official careers page with Gemini AI"
+                  disabled={locatingId === t.company_id}
+                  onClick={async () => {
+                    if (!t.companies) return;
+                    setLocatingId(t.company_id);
+                    try {
+                      const res = await locateCareers({
+                        data: { companyId: t.company_id, companyName: t.companies.name },
+                      });
+                      if (res.ok) {
+                        toast.success(`Located careers link: ${res.url}`);
+                        refresh();
+                      } else {
+                        toast.error(res.error);
+                      }
+                    } catch {
+                      toast.error("Could not locate careers URL");
+                    }
+                    setLocatingId(null);
+                  }}
+                >
+                  <Sparkles
+                    className={`h-4 w-4 text-primary ${locatingId === t.company_id ? "animate-spin" : ""}`}
+                  />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Edit"
+                  onClick={() => t.companies && setEditing(t.companies)}
+                >
                   <Pencil />
                 </Button>
-                <Button size="icon" variant="ghost" aria-label="Remove" onClick={() => untrack(t.id)}>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Remove"
+                  onClick={() => untrack(t.id)}
+                >
                   <Trash2 />
                 </Button>
               </div>
@@ -141,7 +227,12 @@ function CompaniesPage() {
         <aside className="space-y-5">
           <div className="rounded-xl border bg-card p-4 shadow-card">
             <div className="label-mono">Search database</div>
-            <Input className="mt-2" placeholder="e.g. Atlassian" value={q} onChange={(e) => setQ(e.target.value)} />
+            <Input
+              className="mt-2"
+              placeholder="e.g. Atlassian"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
             <div className="mt-2 max-h-72 overflow-y-auto">
               {results.map((c) => (
                 <div key={c.id} className="flex items-center gap-2 py-1.5">
@@ -160,9 +251,16 @@ function CompaniesPage() {
                   )}
                 </div>
               ))}
-              {q && results.length === 0 && <p className="py-2 text-sm text-muted-foreground">Not in the database yet.</p>}
+              {q && results.length === 0 && (
+                <p className="py-2 text-sm text-muted-foreground">Not in the database yet.</p>
+              )}
             </div>
-            <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setEditing("new")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2 -ml-2"
+              onClick={() => setEditing("new")}
+            >
               <Plus /> Add a new company
             </Button>
           </div>
@@ -171,14 +269,34 @@ function CompaniesPage() {
             <div className="label-mono">Import</div>
             <Label className="mt-3 block text-sm">Google Sheet link</Label>
             <div className="mt-1.5 flex gap-2">
-              <Input placeholder="https://docs.google.com/spreadsheets/d/…" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} />
-              <Button disabled={busy || !sheetUrl} onClick={() => runImport(importSheet({ data: { url: sheetUrl } }))}>
+              <Input
+                placeholder="https://docs.google.com/spreadsheets/d/…"
+                value={sheetUrl}
+                onChange={(e) => setSheetUrl(e.target.value)}
+              />
+              <Button
+                disabled={busy || !sheetUrl}
+                onClick={() => runImport(importSheet({ data: { url: sheetUrl } }))}
+              >
                 <FileSpreadsheet />
               </Button>
             </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">Uses the column titled "Company" (and "Careers link" if present).</p>
-            <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
-            <Button variant="outline" className="mt-3 w-full" disabled={busy} onClick={() => fileRef.current?.click()}>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Uses the column titled "Company" (and "Careers link" if present).
+            </p>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+            />
+            <Button
+              variant="outline"
+              className="mt-3 w-full"
+              disabled={busy}
+              onClick={() => fileRef.current?.click()}
+            >
               <Upload /> Upload a CSV file
             </Button>
           </div>
@@ -190,7 +308,15 @@ function CompaniesPage() {
   );
 }
 
-function CompanyDialog({ value, onClose, onSaved }: { value: Company | "new" | null; onClose: () => void; onSaved: () => void }) {
+function CompanyDialog({
+  value,
+  onClose,
+  onSaved,
+}: {
+  value: Company | "new" | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const isNew = value === "new";
   const c = value && value !== "new" ? value : null;
   const [name, setName] = useState("");
@@ -206,7 +332,10 @@ function CompanyDialog({ value, onClose, onSaved }: { value: Company | "new" | n
   async function save() {
     if (!name.trim()) return;
     const careers_url = url.trim() || null;
-    if (careers_url && !/^https?:\/\//.test(careers_url)) { toast.error("Link must start with http:// or https://"); return; }
+    if (careers_url && !/^https?:\/\//.test(careers_url)) {
+      toast.error("Link must start with http:// or https://");
+      return;
+    }
     if (isNew) {
       const uid = await getUserId();
       const { data, error } = await supabase
@@ -214,11 +343,19 @@ function CompanyDialog({ value, onClose, onSaved }: { value: Company | "new" | n
         .insert({ name: name.trim(), careers_url, category: "Added by me", created_by: uid })
         .select("id")
         .single();
-      if (error) { toast.error(error.code === "23505" ? "That company already exists — search for it." : error.message); return; }
+      if (error) {
+        toast.error(
+          error.code === "23505" ? "That company already exists — search for it." : error.message,
+        );
+        return;
+      }
       await supabase.from("tracked_companies").insert({ user_id: uid, company_id: data.id });
     } else if (c) {
       const { error } = await supabase.from("companies").update({ careers_url }).eq("id", c.id);
-      if (error) { toast.error(error.message); return; }
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
     }
     onSaved();
     onClose();
@@ -239,8 +376,14 @@ function CompanyDialog({ value, onClose, onSaved }: { value: Company | "new" | n
           )}
           <div className="space-y-1.5">
             <Label>Careers page link</Label>
-            <Input placeholder="https://company.com/careers" value={url} onChange={(e) => setUrl(e.target.value)} />
-            <p className="text-xs text-muted-foreground">Leave empty and we'll try to find it automatically.</p>
+            <Input
+              placeholder="https://company.com/careers"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave empty and we'll try to find it automatically.
+            </p>
           </div>
           <Button variant="ink" className="w-full" onClick={save}>
             Save

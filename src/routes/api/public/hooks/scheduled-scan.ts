@@ -10,7 +10,9 @@ function dueSlot(hours: number[], now: Date) {
   for (const back of [0, 1]) {
     const hh = (h - back + 24) % 24;
     if (hours.includes(hh) && h - back >= 0) {
-      const slotStartUtc = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), hh) - 5.5 * 3600_000);
+      const slotStartUtc = new Date(
+        Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), hh) - 5.5 * 3600_000,
+      );
       return { key: `${day}-${hh}`, start: slotStartUtc };
     }
   }
@@ -49,7 +51,10 @@ export const Route = createFileRoute("/api/public/hooks/scheduled-scan")({
 
           await supabaseAdmin
             .from("user_settings")
-            .update({ running_until: new Date(now.getTime() + 15 * 60_000).toISOString(), last_scheduled_slot: slot.key })
+            .update({
+              running_until: new Date(now.getTime() + 15 * 60_000).toISOString(),
+              last_scheduled_slot: slot.key,
+            })
             .eq("user_id", s.user_id);
 
           let done = 0;
@@ -59,12 +64,18 @@ export const Route = createFileRoute("/api/public/hooks/scheduled-scan")({
               done++;
             } catch (e) {
               if (e instanceof PauseError) {
-                await supabaseAdmin.from("user_settings").update({ paused_reason: e.message }).eq("user_id", s.user_id);
+                await supabaseAdmin
+                  .from("user_settings")
+                  .update({ paused_reason: e.message })
+                  .eq("user_id", s.user_id);
                 break;
               }
             }
           }
-          await supabaseAdmin.from("user_settings").update({ running_until: null }).eq("user_id", s.user_id);
+          await supabaseAdmin
+            .from("user_settings")
+            .update({ running_until: null })
+            .eq("user_id", s.user_id);
           summary[s.user_id] = done;
         }
         return Response.json({ ok: true, summary });

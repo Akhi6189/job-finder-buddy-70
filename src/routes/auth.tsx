@@ -40,9 +40,16 @@ function AuthPage() {
     const { error, data } =
       mode === "in"
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin + "/jobs" } });
+        : await supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: window.location.origin + "/jobs" },
+          });
     setBusy(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     if (mode === "up" && !data.session) toast.success("Check your email to confirm your account.");
   }
 
@@ -60,7 +67,9 @@ function AuthPage() {
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm rounded-2xl border bg-card p-8 shadow-lift">
         <div className="label-mono">RoleRadar</div>
-        <h1 className="mt-2 text-3xl font-extrabold tracking-tight">{mode === "in" ? "Welcome back" : "Create account"}</h1>
+        <h1 className="mt-2 text-3xl font-extrabold tracking-tight">
+          {mode === "in" ? "Welcome back" : "Create account"}
+        </h1>
         <Button variant="outline" className="mt-6 w-full" onClick={google}>
           Continue with Google
         </Button>
@@ -70,17 +79,33 @@ function AuthPage() {
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
-            <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="pw">Password</Label>
-            <Input id="pw" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Input
+              id="pw"
+              type="password"
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
           </div>
           <Button type="submit" variant="ink" className="w-full" disabled={busy}>
             {mode === "in" ? "Sign in" : "Sign up"}
           </Button>
         </form>
-        <button className="mt-4 w-full text-sm text-muted-foreground hover:text-foreground" onClick={() => setMode(mode === "in" ? "up" : "in")}>
+        <button
+          className="mt-4 w-full text-sm text-muted-foreground hover:text-foreground"
+          onClick={() => setMode(mode === "in" ? "up" : "in")}
+        >
           {mode === "in" ? "No account? Sign up" : "Have an account? Sign in"}
         </button>
       </div>

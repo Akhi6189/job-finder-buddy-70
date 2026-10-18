@@ -25,7 +25,15 @@ export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
 });
 
-const SUGGESTED = ["SDET", "QA Automation", "Software Engineer", "Backend Engineer", "Frontend Engineer", "DevOps Engineer", "Data Engineer"];
+const SUGGESTED = [
+  "SDET",
+  "QA Automation",
+  "Software Engineer",
+  "Backend Engineer",
+  "Frontend Engineer",
+  "DevOps Engineer",
+  "Data Engineer",
+];
 
 function fmtHour(h: number) {
   const ap = h < 12 ? "AM" : "PM";
@@ -63,7 +71,10 @@ function SettingsPage() {
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", s.data.user_id);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["settings"] });
     toast.success("Saved");
   }
@@ -87,9 +98,15 @@ function SettingsPage() {
         <h2 className="font-semibold">Roles to look for</h2>
         <div className="mt-3 flex flex-wrap gap-2">
           {roles.map((r) => (
-            <span key={r} className="flex items-center gap-1 rounded-full bg-accent px-3 py-1 text-sm text-accent-foreground">
+            <span
+              key={r}
+              className="flex items-center gap-1 rounded-full bg-accent px-3 py-1 text-sm text-accent-foreground"
+            >
               {r}
-              <button aria-label={`Remove ${r}`} onClick={() => setRoles(roles.filter((x) => x !== r))}>
+              <button
+                aria-label={`Remove ${r}`}
+                onClick={() => setRoles(roles.filter((x) => x !== r))}
+              >
                 <X className="h-3.5 w-3.5" />
               </button>
             </span>
@@ -104,12 +121,22 @@ function SettingsPage() {
             setNewRole("");
           }}
         >
-          <Input placeholder="Add a role, e.g. Test Automation Engineer" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
-          <Button type="submit" variant="outline">Add</Button>
+          <Input
+            placeholder="Add a role, e.g. Test Automation Engineer"
+            value={newRole}
+            onChange={(e) => setNewRole(e.target.value)}
+          />
+          <Button type="submit" variant="outline">
+            Add
+          </Button>
         </form>
         <div className="mt-3 flex flex-wrap gap-1.5">
           {SUGGESTED.filter((x) => !roles.includes(x)).map((x) => (
-            <button key={x} className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setRoles([...roles, x])}>
+            <button
+              key={x}
+              className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setRoles([...roles, x])}
+            >
               + {x}
             </button>
           ))}
@@ -118,8 +145,15 @@ function SettingsPage() {
 
       <section className="rounded-xl border bg-card p-5 shadow-card">
         <h2 className="font-semibold">Your resume</h2>
-        <p className="text-sm text-muted-foreground">Paste your resume text. It's used to score how well you match each role.</p>
-        <Textarea className="mt-3 min-h-56 font-mono text-xs" value={resume} onChange={(e) => setResume(e.target.value)} placeholder="Paste resume text here…" />
+        <p className="text-sm text-muted-foreground">
+          Paste your resume text. It's used to score how well you match each role.
+        </p>
+        <Textarea
+          className="mt-3 min-h-56 font-mono text-xs"
+          value={resume}
+          onChange={(e) => setResume(e.target.value)}
+          placeholder="Paste resume text here…"
+        />
       </section>
 
       <section className="rounded-xl border bg-card p-5 shadow-card">
@@ -132,9 +166,15 @@ function SettingsPage() {
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {hours.map((h) => (
-            <span key={h} className="flex items-center gap-1 rounded-full bg-ink px-3 py-1 font-mono text-sm text-ink-foreground">
+            <span
+              key={h}
+              className="flex items-center gap-1 rounded-full bg-ink px-3 py-1 font-mono text-sm text-ink-foreground"
+            >
               {fmtHour(h)}
-              <button aria-label="Remove time" onClick={() => setHours(hours.filter((x) => x !== h))}>
+              <button
+                aria-label="Remove time"
+                onClick={() => setHours(hours.filter((x) => x !== h))}
+              >
                 <X className="h-3.5 w-3.5" />
               </button>
             </span>
@@ -142,14 +182,22 @@ function SettingsPage() {
         </div>
         <div className="mt-3 flex items-center gap-2">
           <Label className="text-sm">Add time</Label>
-          <select className="h-9 rounded-md border bg-background px-2 text-sm" value={addHour} onChange={(e) => setAddHour(e.target.value)}>
+          <select
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            value={addHour}
+            onChange={(e) => setAddHour(e.target.value)}
+          >
             {Array.from({ length: 24 }, (_, h) => (
               <option key={h} value={h}>
                 {fmtHour(h)}
               </option>
             ))}
           </select>
-          <Button variant="outline" size="sm" onClick={() => !hours.includes(+addHour) && setHours([...hours, +addHour])}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => !hours.includes(+addHour) && setHours([...hours, +addHour])}
+          >
             Add
           </Button>
         </div>

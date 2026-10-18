@@ -29,8 +29,9 @@ npm run dev
 - Tailwind CSS
 
 ## Build the Android APK
+
 1. Install Node.js and Android Studio.
 2. `npm install`
 3. `npx cap add android` then `npx cap sync android`
 4. `npx cap open android` → in Android Studio: Build > Build APK(s). The APK is in `android/app/build/outputs/apk/debug/`.
-The app loads the published site, so publish changes first; no rebuild is needed for updates.
+   The app loads the published site, so publish changes first; no rebuild is needed for updates.

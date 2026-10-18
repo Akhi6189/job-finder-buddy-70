@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, redirect, useNavigate } from "@tanstack/react-router";
-import { Briefcase, Building2, Settings, LogOut, Radar } from "lucide-react";
+import { Briefcase, Building2, Settings, LogOut, Radar, FileCheck2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -14,6 +14,7 @@ export const Route = createFileRoute("/_authenticated")({
 
 const nav = [
   { to: "/jobs", label: "Roles", icon: Briefcase },
+  { to: "/applications", label: "Applications", icon: FileCheck2 },
   { to: "/companies", label: "Companies", icon: Building2 },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
@@ -33,7 +34,10 @@ function Shell() {
                 key={n.to}
                 to={n.to}
                 className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
-                activeProps={{ className: "rounded-md px-3 py-1.5 text-sm bg-accent text-accent-foreground font-medium" }}
+                activeProps={{
+                  className:
+                    "rounded-md px-3 py-1.5 text-sm bg-accent text-accent-foreground font-medium",
+                }}
               >
                 {n.label}
               </Link>
@@ -54,13 +58,15 @@ function Shell() {
       <main className="mx-auto max-w-6xl px-4 py-6">
         <Outlet />
       </main>
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-card md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t bg-card md:hidden">
         {nav.map((n) => (
           <Link
             key={n.to}
             to={n.to}
             className="flex flex-col items-center gap-1 py-2.5 text-xs text-muted-foreground"
-            activeProps={{ className: "flex flex-col items-center gap-1 py-2.5 text-xs text-primary font-medium" }}
+            activeProps={{
+              className: "flex flex-col items-center gap-1 py-2.5 text-xs text-primary font-medium",
+            }}
           >
             <n.icon className="h-5 w-5" />
             {n.label}

@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { scanTrackedCompany, scoreJobs } from "./scan.server";
+import { scanTrackedCompany, scoreJobs, findCareersUrl } from "./scan.server";
 
 export const scanCompany = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -21,14 +21,23 @@ export const rescoreJob = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const db = context.supabase;
     const { data: job } = await db.from("jobs").select("*").eq("id", data.jobId).single();
-    const { data: s } = await db.from("user_settings").select("resume_text").eq("user_id", context.userId).maybeSingle();
+    const { data: s } = await db
+      .from("user_settings")
+      .select("resume_text")
+      .eq("user_id", context.userId)
+      .maybeSingle();
     if (!job) throw new Error("Job not found");
     if (!s?.resume_text?.trim()) throw new Error("Add your resume in Settings first");
     const [r] = await scoreJobs(s.resume_text, [job]);
     if (!r) throw new Error("Could not score this job");
     await db
       .from("jobs")
-      .update({ score: r.score, score_summary: r.summary, matched_skills: r.matched, missing_skills: r.missing })
+      .update({
+        score: r.score,
+        score_summary: r.summary,
+        matched_skills: r.matched,
+        missing_skills: r.missing,
+      })
       .eq("id", job.id);
     return r;
   });
@@ -36,31 +45,56 @@ export const rescoreJob = createServerFn({ method: "POST" })
 // Helper to check if a URL is likely a specific career page vs just a main home page
 function isCareerUrl(url: string | undefined): boolean {
   if (!url || !/^https?:\/\//i.test(url)) return false;
-  return /\b(career|careers|jobs|job|join|work|workat|openings|positions)\b/i.test(url);
+  // Ignore naive /careers or /career appends that fail
+  if (url.endsWith("/careers") || url.endsWith("/career") || url.endsWith("/carrer")) return false;
+  return /\b(greenhouse|lever|ashby|smartrecruiters|workday)\b/i.test(url);
 }
 
-// Helper to formulate a career URL if only domain or blank is provided
-async function findCareerPage(companyName: string, domainUrl?: string): Promise<string | undefined> {
-  if (domainUrl && /^https?:\/\//i.test(domainUrl)) {
-    const cleanUrl = domainUrl.replace(/\/+$/, "");
-    return `${cleanUrl}/careers`;
-  }
-  return `https://www.google.com/search?q=${encodeURIComponent(companyName + " careers")}`;
+// Uses Gemini AI to locate genuine career pages instead of appending /careers
+async function findCareerPage(
+  companyName: string,
+  domainUrl?: string,
+): Promise<string | undefined> {
+  const url = await findCareersUrl(companyName, domainUrl);
+  return url || undefined;
 }
+
+export const locateCareersForCompany = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) => z.object({ companyId: z.string().uuid(), companyName: z.string() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const url = await findCareersUrl(data.companyName);
+    if (url) {
+      await context.supabase
+        .from("companies")
+        .update({ careers_url: url })
+        .eq("id", data.companyId);
+      return { ok: true as const, url };
+    }
+    return { ok: false as const, error: "Could not locate careers page" };
+  });
 
 const rowsSchema = z
   .array(
     z.object({
       name: z.string().trim().min(1).max(120),
       careers_url: z.string().url().max(500).optional(),
-    })
+    }),
   )
   .max(500);
 
-async function importRows(db: any, userId: string, rows: z.infer<typeof rowsSchema>) {
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
+
+type DB = SupabaseClient<Database>;
+
+async function importRows(db: DB, userId: string, rows: z.infer<typeof rowsSchema>) {
   const { data: all } = await db.from("companies").select("id, name, careers_url");
   const byName = new Map<string, { id: string; careers_url: string | null }>(
-    (all ?? []).map((c: any) => [c.name.toLowerCase(), c])
+    (all ?? []).map((c: { id: string; name: string; careers_url: string | null }) => [
+      c.name.toLowerCase(),
+      c,
+    ]),
   );
   let created = 0;
   const ids: string[] = [];
@@ -96,7 +130,7 @@ async function importRows(db: any, userId: string, rows: z.infer<typeof rowsSche
       {
         onConflict: "user_id,company_id",
         ignoreDuplicates: true,
-      }
+      },
     );
   }
   return { tracked: unique.length, created };
@@ -117,7 +151,9 @@ export const importCompanies = createServerFn({ method: "POST" })
 
     const res = await fetch(csvUrl);
     if (!res.ok) {
-      throw new Error("Could not fetch the sheet. Make sure sharing is set to 'Anyone with the link can view'.");
+      throw new Error(
+        "Could not fetch the sheet. Make sure sharing is set to 'Anyone with the link can view'.",
+      );
     }
 
     const csvText = await res.text();
@@ -133,7 +169,7 @@ export const importCompanies = createServerFn({ method: "POST" })
           i++;
         } else if (char === '"') {
           inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
+        } else if (char === "," && !inQuotes) {
           result.push(current.trim());
           current = "";
         } else {
@@ -166,17 +202,23 @@ export const importCompanies = createServerFn({ method: "POST" })
         if (isCareerUrl(rawLink)) {
           finalCareerUrl = rawLink;
         } else {
-          finalCareerUrl = await findCareerPage(name, /^https?:\/\//i.test(rawLink) ? rawLink : undefined);
+          finalCareerUrl = await findCareerPage(
+            name,
+            /^https?:\/\//i.test(rawLink) ? rawLink : undefined,
+          );
         }
 
         return {
           name,
-          careers_url: finalCareerUrl && /^https?:\/\//i.test(finalCareerUrl) ? finalCareerUrl : undefined,
+          careers_url:
+            finalCareerUrl && /^https?:\/\//i.test(finalCareerUrl) ? finalCareerUrl : undefined,
         };
-      })
+      }),
     );
 
-    const validRows = parsedRows.filter((r): r is { name: string; careers_url?: string } => r !== null);
+    const validRows = parsedRows.filter(
+      (r): r is { name: string; careers_url?: string } => r !== null,
+    );
 
     return importRows(context.supabase, context.userId, rowsSchema.parse(validRows.slice(0, 500)));
   });
