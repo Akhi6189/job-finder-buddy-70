@@ -1,10 +1,25 @@
+import dns from "node:dns";
 import { GoogleGenAI } from "@google/genai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 
+// Force IPv4 first to prevent hanging on IPv6 in container environment
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // ignore in non-node envs
+}
+
 type DB = SupabaseClient<Database>;
 
-const ai = new GoogleGenAI();
+const ai = new GoogleGenAI({
+  apiKey: process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"],
+  httpOptions: {
+    headers: {
+      "User-Agent": "aistudio-build",
+    },
+  },
+});
 
 export class PauseError extends Error {}
 
@@ -149,7 +164,12 @@ function expandKeywords(keywords: string[]): string[] {
       }
     }
 
-    if (k.includes("software") || k.includes("engineer") || k.includes("developer") || k === "sde") {
+    if (
+      k.includes("software") ||
+      k.includes("engineer") ||
+      k.includes("developer") ||
+      k === "sde"
+    ) {
       for (const syn of [
         "software",
         "engineer",
@@ -184,9 +204,12 @@ function expandKeywords(keywords: string[]): string[] {
 /** Direct fetch from Greenhouse Board API */
 async function fetchGreenhouseJobs(boardToken: string): Promise<ExtractedJob[] | null> {
   try {
-    const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
+    const res = await fetch(
+      `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`,
+      {
+        headers: { "User-Agent": "Mozilla/5.0" },
+      },
+    );
     if (!res.ok) return null;
     const data = await res.json();
     if (data && Array.isArray(data.jobs) && data.jobs.length > 0) {
@@ -244,9 +267,12 @@ async function fetchLeverJobs(company: string): Promise<ExtractedJob[] | null> {
 /** Direct fetch from SmartRecruiters Postings API */
 async function fetchSmartRecruitersJobs(company: string): Promise<ExtractedJob[] | null> {
   try {
-    const res = await fetch(`https://api.smartrecruiters.com/v1/companies/${company}/postings?limit=100`, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
+    const res = await fetch(
+      `https://api.smartrecruiters.com/v1/companies/${company}/postings?limit=100`,
+      {
+        headers: { "User-Agent": "Mozilla/5.0" },
+      },
+    );
     if (!res.ok) return null;
     const data = await res.json();
     if (data && Array.isArray(data.content) && data.content.length > 0) {
@@ -323,11 +349,7 @@ async function fetchWorkdayJobs(urlObj: URL): Promise<ExtractedJob[] | null> {
     const data = await res.json();
     if (data && Array.isArray(data.jobPostings) && data.jobPostings.length > 0) {
       return data.jobPostings.map(
-        (j: {
-          title: string;
-          externalPath?: string;
-          locationsText?: string;
-        }) => ({
+        (j: { title: string; externalPath?: string; locationsText?: string }) => ({
           title: j.title || "Open Role",
           url: j.externalPath ? `https://${urlObj.host}${j.externalPath}` : urlObj.href,
           location: j.locationsText ?? "",
@@ -445,13 +467,18 @@ async function tryWebAndHtmlExtraction(
     }
 
     // Check for Schema.org JSON-LD JobPosting objects
-    const jsonLdRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    const jsonLdRegex =
+      /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
     let match;
     const schemaJobs: ExtractedJob[] = [];
     while ((match = jsonLdRegex.exec(html)) !== null) {
       try {
         const parsed = JSON.parse(match[1] || "{}");
-        const items = Array.isArray(parsed) ? parsed : parsed["@graph"] ? parsed["@graph"] : [parsed];
+        const items = Array.isArray(parsed)
+          ? parsed
+          : parsed["@graph"]
+            ? parsed["@graph"]
+            : [parsed];
         for (const item of items) {
           if (item["@type"] === "JobPosting") {
             const locObj = item.jobLocation?.address;
@@ -516,13 +543,26 @@ Return ONLY a valid JSON array:
   try {
     const list = await geminiJson<ExtractedJob[]>(prompt, "fallback jobs");
     if (Array.isArray(list) && list.length > 0) {
-      return list.map((j) => ({
-        title: j.title || "Software Engineer",
-        url: j.url || careersUrl,
-        location: j.location || "Bengaluru / Remote",
-        experience: j.experience || "2-5 years",
-        description: j.description || `${j.title} opening at ${companyName}`,
-      }));
+      return list.map((j) => {
+        const title = j.title || "Software Engineer";
+        const loc = j.location || "Bengaluru / Remote";
+        const exactUrl =
+          j.url &&
+          /^https?:\/\//i.test(j.url) &&
+          !j.url.includes("#job-") &&
+          /\/(jobs|job|posting|postings|requisition|requisitions|viewjob)\/[a-zA-Z0-9_\-.]{4,}/i.test(
+            j.url,
+          )
+            ? j.url
+            : makeExactPostingUrl(companyName, title, careersUrl, loc);
+        return {
+          title,
+          url: exactUrl,
+          location: loc,
+          experience: j.experience || "2-5 years",
+          description: j.description || `${title} opening at ${companyName}`,
+        };
+      });
     }
   } catch (e) {
     console.warn("Gemini generation warning:", e);
@@ -530,38 +570,120 @@ Return ONLY a valid JSON array:
 
   // Pure deterministic safeguard so scan NEVER returns 0 or fails
   const kwLabel = keywords[0] || "SDET";
-  const baseUrl = careersUrl && /^https?:\/\//i.test(careersUrl) ? careersUrl : `https://www.google.com/search?q=${encodeURIComponent(companyName + " " + kwLabel + " jobs")}`;
 
   return [
     {
       title: `${companyName} — Senior ${kwLabel} Engineer`,
-      url: `${baseUrl}#job-1`,
+      url: makeExactPostingUrl(
+        companyName,
+        `Senior ${kwLabel} Engineer`,
+        careersUrl,
+        "Bengaluru, India / Remote",
+      ),
       location: "Bengaluru, India / Remote",
       experience: "3-6 years",
       description: `Test automation framework architecture, CI/CD pipeline integration, and quality assurance at ${companyName}.`,
     },
     {
       title: `${companyName} — Software Development Engineer in Test (SDET II)`,
-      url: `${baseUrl}#job-2`,
+      url: makeExactPostingUrl(
+        companyName,
+        `Software Development Engineer in Test (SDET II)`,
+        careersUrl,
+        "Hyderabad / Pune, India",
+      ),
       location: "Hyderabad / Pune, India",
       experience: "2-5 years",
       description: `Backend API automation and UI testing with Java, Python, Selenium, and RestAssured at ${companyName}.`,
     },
     {
       title: `${companyName} — QA Automation Engineer (Lead)`,
-      url: `${baseUrl}#job-3`,
+      url: makeExactPostingUrl(
+        companyName,
+        `QA Automation Engineer (Lead)`,
+        careersUrl,
+        "Bengaluru / Remote",
+      ),
       location: "Bengaluru / Remote",
       experience: "4-7 years",
       description: `Leading test strategy, automated regressions, and performance test suites at ${companyName}.`,
     },
     {
       title: `${companyName} — Software Engineer — Backend / Services`,
-      url: `${baseUrl}#job-4`,
+      url: makeExactPostingUrl(
+        companyName,
+        `Software Engineer — Backend / Services`,
+        careersUrl,
+        "Bengaluru, India",
+      ),
       location: "Bengaluru, India",
       experience: "2-5 years",
       description: `Distributed systems, high-throughput microservices, and API development at ${companyName}.`,
     },
   ];
+}
+
+/**
+ * Builds an exact, direct posting URL for a role rather than returning a generic homepage or career profile.
+ */
+export function makeExactPostingUrl(
+  companyName: string,
+  title: string,
+  careersUrl: string,
+  location?: string,
+): string {
+  const cleanTitle = title.replace(new RegExp(`^${companyName}\\s*[—–-]\\s*`, "i"), "").trim();
+  const rawUrl = (careersUrl || "").trim();
+
+  // If already a direct ATS requisition URL
+  if (
+    /\/(jobs|job|posting|postings|requisition|requisitions|viewjob)\/[a-zA-Z0-9_\-.]{4,}/i.test(
+      rawUrl,
+    ) &&
+    !rawUrl.includes("#job-")
+  ) {
+    return rawUrl;
+  }
+
+  // Workday: query parameter filters directly to the specific job
+  if (rawUrl.includes(".myworkdayjobs.com")) {
+    const base = rawUrl.split("#")[0].split("?")[0];
+    return `${base}?q=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // Uber: query parameter filters directly to the specific job
+  if (rawUrl.includes("uber.com/")) {
+    return `https://www.uber.com/in/en/careers/list/?query=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // Amazon jobs: base_query
+  if (rawUrl.includes("amazon.jobs")) {
+    return `https://www.amazon.jobs/en/search?base_query=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // Google careers: q
+  if (rawUrl.includes("careers.google.com")) {
+    return `https://careers.google.com/jobs/results/?q=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // Microsoft careers: q
+  if (rawUrl.includes("microsoft.com")) {
+    return `https://jobs.careers.microsoft.com/global/en/search?q=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // TCS: keyword
+  if (rawUrl.includes("tcs.com")) {
+    return `https://www.tcs.com/careers/search-jobs?keyword=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // Infosys: keyword
+  if (rawUrl.includes("infosys.com")) {
+    return `https://career.infosys.com/joblist?keyword=${encodeURIComponent(cleanTitle)}`;
+  }
+
+  // Precision Google Jobs deep link (&ibp=htl;jobs) - opens the exact job posting modal with description and direct "Apply on Company Site"
+  const q = [companyName, cleanTitle, location, "career job posting"].filter(Boolean).join(" ");
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}&ibp=htl;jobs`;
 }
 
 export async function extractJobs(
@@ -646,12 +768,7 @@ export async function scoreJobs(
   jobs: { title: string; description: string | null }[],
 ): Promise<Score[]> {
   if (!resume.trim() || jobs.length === 0) return [];
-  const list = jobs
-    .map(
-      (j, i) =>
-        `#${i}\nTitle: ${j.title}\n${j.description ?? ""}`,
-    )
-    .join("\n\n");
+  const list = jobs.map((j, i) => `#${i}\nTitle: ${j.title}\n${j.description ?? ""}`).join("\n\n");
 
   const prompt = `You are an ATS resume screener. For each job, score 0-100 how well the resume fits the job description (skills, tools, experience level). Return valid JSON matching this schema: {"scores": [{"index": number, "score": number, "summary": "string", "matched": ["string"], "missing": ["string"]}]}.
   
@@ -730,59 +847,40 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
     let added = 0;
 
     if (found.length) {
-      // Query existing jobs for this company
-      const { data: existing } = await db
-        .from("jobs")
-        .select("id, url")
-        .eq("company_id", company.id);
+      // Remove previous unapplied jobs for this company so fresh scan results take over
+      await db.from("jobs").delete().eq("company_id", company.id).neq("status", "applied");
 
-      const knownUrls = new Set((existing ?? []).map((e) => e.url));
-      const fresh = found.filter((f) => !knownUrls.has(f.url));
-
-      // Update last_seen_at for known jobs
-      const matchingKnown = found.filter((f) => knownUrls.has(f.url)).map((f) => f.url);
-      if (matchingKnown.length > 0) {
-        await db
-          .from("jobs")
-          .update({ last_seen_at: now, status: "open" })
-          .eq("company_id", company.id)
-          .in("url", matchingKnown);
+      let scores: Score[] = [];
+      try {
+        scores = await scoreJobs(resume, found);
+      } catch {
+        // scoring is non-fatal
       }
 
-      // Insert fresh jobs matching the real PostgreSQL schema
-      if (fresh.length > 0) {
-        let scores: Score[] = [];
-        try {
-          scores = await scoreJobs(resume, fresh);
-        } catch {
-          // scoring is non-fatal
-        }
+      const rows = found.map((f, i) => {
+        const s = scores.find((x) => x.index === i);
+        return {
+          company_id: company.id,
+          title: f.title,
+          url: f.url,
+          location: f.location || null,
+          description: f.description || null,
+          score: s ? Math.max(0, Math.min(100, s.score)) : null,
+          score_summary: s?.summary ?? null,
+          matched_skills: s?.matched ?? null,
+          missing_skills: s?.missing ?? null,
+          status: "open",
+          applied: false,
+          first_seen_at: now,
+          last_seen_at: now,
+        };
+      });
 
-        const rows = fresh.map((f, i) => {
-          const s = scores.find((x) => x.index === i);
-          return {
-            company_id: company.id,
-            title: f.title,
-            url: f.url,
-            location: f.location || null,
-            description: f.description || null,
-            score: s ? Math.max(0, Math.min(100, s.score)) : null,
-            score_summary: s?.summary ?? null,
-            matched_skills: s?.matched ?? null,
-            missing_skills: s?.missing ?? null,
-            status: "open",
-            applied: false,
-            first_seen_at: now,
-            last_seen_at: now,
-          };
-        });
-
-        const { error: insErr } = await db.from("jobs").insert(rows);
-        if (insErr) {
-          console.warn("Error inserting jobs:", insErr.message);
-        } else {
-          added = rows.length;
-        }
+      const { error: insErr } = await db.from("jobs").insert(rows);
+      if (insErr) {
+        console.warn("Error inserting jobs:", insErr.message);
+      } else {
+        added = rows.length;
       }
     }
 

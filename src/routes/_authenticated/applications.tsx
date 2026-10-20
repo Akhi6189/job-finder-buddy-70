@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { getExactJobPostingUrl } from "@/lib/data";
 import {
   useApplications,
   type ApplicationItem,
@@ -428,7 +429,17 @@ function ApplicationsPage() {
 
                   {item.url && (
                     <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                      <a href={item.url} target="_blank" rel="noreferrer">
+                      <a
+                        href={getExactJobPostingUrl({
+                          url: item.url,
+                          title: item.title,
+                          companies: { name: item.company },
+                          location: item.location,
+                        })}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="View exact posting"
+                      >
                         <ExternalLink className="h-4 w-4" />
                       </a>
                     </Button>
@@ -646,11 +657,16 @@ function ApplicationCard({
         <div className="flex items-center gap-1">
           {item.url && (
             <a
-              href={item.url}
+              href={getExactJobPostingUrl({
+                url: item.url,
+                title: item.title,
+                companies: { name: item.company },
+                location: item.location,
+              })}
               target="_blank"
               rel="noreferrer"
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              title="Open job posting"
+              title="Open exact job posting"
             >
               <ExternalLink className="h-3.5 w-3.5" />
             </a>

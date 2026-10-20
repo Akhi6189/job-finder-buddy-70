@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { X } from "lucide-react";
+import { X, Upload, FileText, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { loadSettings } from "@/lib/data";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   head: () => ({
@@ -50,6 +51,57 @@ function SettingsPage() {
   const [enabled, setEnabled] = useState(true);
   const [addHour, setAddHour] = useState("9");
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const detectedSkills = useMemo(() => {
+    if (!resume) return [];
+    const text = resume.toLowerCase();
+    const common = [
+      "Java",
+      "Python",
+      "JavaScript",
+      "TypeScript",
+      "Selenium",
+      "Cypress",
+      "Playwright",
+      "RestAssured",
+      "Postman",
+      "API Testing",
+      "Cucumber",
+      "TestNG",
+      "JUnit",
+      "CI/CD",
+      "Jenkins",
+      "Docker",
+      "Kubernetes",
+      "AWS",
+      "Git",
+      "SQL",
+      "Appium",
+      "Jira",
+      "Performance Testing",
+      "Automation Framework",
+      "Page Object Model",
+      "BDD",
+      "TDD",
+    ];
+    return common.filter((s) => text.includes(s.toLowerCase()));
+  }, [resume]);
+
+  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (text) {
+        setResume(text.slice(0, 20000));
+        toast.success(`Imported resume from ${file.name} (${text.length} characters)`);
+      }
+    };
+    reader.readAsText(file);
+  }
+
   useEffect(() => {
     if (!s.data) return;
     setRoles(s.data.role_keywords);
@@ -76,7 +128,7 @@ function SettingsPage() {
       return;
     }
     qc.invalidateQueries({ queryKey: ["settings"] });
-    toast.success("Saved");
+    toast.success("Settings saved! Your resume powers all role match scores.");
   }
 
   if (s.isLoading) return <p className="text-muted-foreground">Loading…</p>;
@@ -143,17 +195,70 @@ function SettingsPage() {
         </div>
       </section>
 
-      <section className="rounded-xl border bg-card p-5 shadow-card">
-        <h2 className="font-semibold">Your resume</h2>
-        <p className="text-sm text-muted-foreground">
-          Paste your resume text. It's used to score how well you match each role.
-        </p>
-        <Textarea
-          className="mt-3 min-h-56 font-mono text-xs"
-          value={resume}
-          onChange={(e) => setResume(e.target.value)}
-          placeholder="Paste resume text here…"
-        />
+      <section className="rounded-xl border bg-card p-5 shadow-card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-semibold text-lg flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" /> Your Resume
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Uploaded here to evaluate fit and generate the Resume Match Progress Bar across all
+              open roles.
+            </p>
+          </div>
+          <div>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+              accept=".txt,.md,.json,.pdf,.doc,.docx"
+              className="hidden"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className="h-4 w-4 mr-1.5" /> Upload Resume File
+            </Button>
+          </div>
+        </div>
+
+        {detectedSkills.length > 0 && (
+          <div className="space-y-1 rounded-lg border bg-muted/20 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5 text-success" /> Detected Skills in Resume (
+              {detectedSkills.length})
+            </div>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {detectedSkills.map((sk) => (
+                <Badge
+                  key={sk}
+                  variant="secondary"
+                  className="text-xs bg-success/15 text-success font-medium"
+                >
+                  ✓ {sk}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="relative">
+          <Textarea
+            className="min-h-56 font-mono text-xs leading-relaxed"
+            value={resume}
+            onChange={(e) => setResume(e.target.value)}
+            placeholder="Paste or upload your resume text here…"
+          />
+          <div className="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
+            <span>{resume.length} / 20,000 characters</span>
+            {resume.length > 0 && (
+              <span className="text-success font-medium">✓ Ready for Radar matching</span>
+            )}
+          </div>
+        </div>
       </section>
 
       <section className="rounded-xl border bg-card p-5 shadow-card">
