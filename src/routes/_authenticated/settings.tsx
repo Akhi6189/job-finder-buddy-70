@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { X, Upload, FileText, CheckCircle2 } from "lucide-react";
+import { X, Upload, FileText, CheckCircle2, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { loadSettings } from "@/lib/data";
+import { parseUploadedResume, rescoreAllJobs } from "@/lib/jobs.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,6 +53,11 @@ function SettingsPage() {
   const [enabled, setEnabled] = useState(true);
   const [addHour, setAddHour] = useState("9");
 
+  const parseResume = useServerFn(parseUploadedResume);
+  const rescoreAll = useServerFn(rescoreAllJobs);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const detectedSkills = useMemo(() => {
@@ -88,18 +95,51 @@ function SettingsPage() {
     return common.filter((s) => text.includes(s.toLowerCase()));
   }, [resume]);
 
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      if (text) {
-        setResume(text.slice(0, 20000));
-        toast.success(`Imported resume from ${file.name} (${text.length} characters)`);
+
+    setIsUploading(true);
+    const toastId = toast.loading(`Parsing fonts & decoding ${file.name}…`);
+
+    try {
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const res = reader.result as string;
+          const b64 = res.includes(",") ? res.split(",")[1]! : res;
+          resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const parsed = await parseResume({
+        data: {
+          fileBase64: base64,
+          fileName: file.name,
+          mimeType: file.type,
+        },
+      });
+
+      if (parsed.text) {
+        setResume(parsed.text.slice(0, 20000));
+        toast.success(
+          `Successfully decoded & imported ${file.name} (${parsed.text.length} chars)`,
+          {
+            id: toastId,
+          },
+        );
+      } else {
+        toast.error("Could not extract readable text from document", { id: toastId });
       }
-    };
-    reader.readAsText(file);
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Failed to parse document", { id: toastId });
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   }
 
   useEffect(() => {
@@ -112,6 +152,7 @@ function SettingsPage() {
 
   async function save() {
     if (!s.data) return;
+    setIsSaving(true);
     const { error } = await supabase
       .from("user_settings")
       .update({
@@ -123,12 +164,25 @@ function SettingsPage() {
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", s.data.user_id);
+
     if (error) {
       toast.error(error.message);
+      setIsSaving(false);
       return;
     }
+
     qc.invalidateQueries({ queryKey: ["settings"] });
-    toast.success("Settings saved! Your resume powers all role match scores.");
+    toast.success("Settings saved! Rescoring open roles against your updated resume…");
+
+    try {
+      const r = await rescoreAll();
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success(`Rescored ${r.scored} roles with your updated resume!`);
+    } catch {
+      // background rescore error is non-fatal
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   if (s.isLoading) return <p className="text-muted-foreground">Loading…</p>;
@@ -247,7 +301,7 @@ function SettingsPage() {
 
         <div className="relative">
           <Textarea
-            className="min-h-56 font-mono text-xs leading-relaxed"
+            className="min-h-64 font-sans text-sm leading-relaxed"
             value={resume}
             onChange={(e) => setResume(e.target.value)}
             placeholder="Paste or upload your resume text here…"

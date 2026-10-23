@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { scanTrackedCompany, scoreJobs, findCareersUrl } from "./scan.server";
+import { computeATSScore } from "./ats-score";
 
 try {
   dns.setDefaultResultOrder("ipv4first");
@@ -22,6 +23,20 @@ export const scanCompany = createServerFn({ method: "POST" })
     }
   });
 
+const DEFAULT_SDET_RESUME = `Akhil Bhadran
+Senior SDET / QA Automation Engineer | Bengaluru, India
+Email: Akhird06@gmail.com
+
+SUMMARY:
+Results-driven Senior QA Automation Engineer / SDET with 6+ years of experience in designing, building, and maintaining scalable test automation frameworks for web, mobile, and distributed microservices. Expert in Java, Python, Selenium, Playwright, Cypress, RestAssured, and CI/CD pipelines.
+
+TECHNICAL SKILLS:
+- Languages: Java, Python, TypeScript, JavaScript, SQL
+- Automation & Testing: Selenium WebDriver, Playwright, Cypress, RestAssured, Postman, Appium, Cucumber (BDD), TestNG, JUnit
+- Architecture & APIs: REST APIs, Microservices, Distributed Systems, GraphQL, Kafka, JSON
+- CI/CD & DevOps: Jenkins, GitHub Actions, GitLab CI, Docker, Kubernetes, AWS, Git, Linux
+- Methodologies: Page Object Model (POM), BDD, TDD, Agile/Scrum, Performance Testing (JMeter), Root Cause Analysis, Regression Testing`;
+
 export const rescoreJob = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator((d) => z.object({ jobId: z.string().uuid() }).parse(d))
@@ -34,9 +49,9 @@ export const rescoreJob = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .maybeSingle();
     if (!job) throw new Error("Job not found");
-    if (!s?.resume_text?.trim()) throw new Error("Add your resume in Settings first");
-    const [r] = await scoreJobs(s.resume_text, [job]);
-    if (!r) throw new Error("Could not score this job");
+
+    const resumeToUse = s?.resume_text?.trim() || DEFAULT_SDET_RESUME;
+    const r = computeATSScore(resumeToUse, job.title, job.description);
     const updatedScore = Math.max(0, Math.min(100, Math.round(r.score)));
     await db
       .from("jobs")
@@ -65,70 +80,38 @@ export const rescoreAllJobs = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .maybeSingle();
 
-    if (!s?.resume_text?.trim()) {
-      throw new Error("Add your resume in Settings first");
-    }
+    const resumeToUse = s?.resume_text?.trim() || DEFAULT_SDET_RESUME;
 
-    const { data: jobs } = await db
+    // Fetch all jobs in the database
+    const { data: allJobs, error } = await db
       .from("jobs")
       .select("id, title, description")
-      .is("score", null)
-      .limit(60);
+      .order("first_seen_at", { ascending: false });
 
-    if (!jobs?.length) {
-      // If no unscored jobs, score top 30 jobs
-      const { data: allJobs } = await db
-        .from("jobs")
-        .select("id, title, description")
-        .order("first_seen_at", { ascending: false })
-        .limit(40);
-      if (!allJobs?.length) return { scored: 0 };
-      const scores = await scoreJobs(
-        s.resume_text,
-        allJobs.map((j) => ({ title: j.title, description: j.description })),
-      );
-      let updated = 0;
-      for (let i = 0; i < allJobs.length; i++) {
-        const sc = scores.find((x) => x.index === i);
-        if (sc) {
+    if (error || !allJobs?.length) return { scored: 0, total: 0 };
+
+    let updated = 0;
+    const batchSize = 40;
+    for (let i = 0; i < allJobs.length; i += batchSize) {
+      const chunk = allJobs.slice(i, i + batchSize);
+      await Promise.all(
+        chunk.map(async (j) => {
+          const sc = computeATSScore(resumeToUse, j.title, j.description);
           await db
             .from("jobs")
             .update({
-              score: Math.max(0, Math.min(100, Math.round(sc.score))),
+              score: sc.score,
               score_summary: sc.summary,
               matched_skills: sc.matched,
               missing_skills: sc.missing,
             })
-            .eq("id", allJobs[i]!.id);
+            .eq("id", j.id);
           updated++;
-        }
-      }
-      return { scored: updated };
+        }),
+      );
     }
 
-    const scores = await scoreJobs(
-      s.resume_text,
-      jobs.map((j) => ({ title: j.title, description: j.description })),
-    );
-
-    let updated = 0;
-    for (let i = 0; i < jobs.length; i++) {
-      const sc = scores.find((x) => x.index === i);
-      if (sc) {
-        await db
-          .from("jobs")
-          .update({
-            score: Math.max(0, Math.min(100, Math.round(sc.score))),
-            score_summary: sc.summary,
-            matched_skills: sc.matched,
-            missing_skills: sc.missing,
-          })
-          .eq("id", jobs[i]!.id);
-        updated++;
-      }
-    }
-
-    return { scored: updated };
+    return { scored: updated, total: allJobs.length };
   });
 
 export const tailorResumeForJob = createServerFn({ method: "POST" })
@@ -433,3 +416,96 @@ export const importCompanies = createServerFn({ method: "POST" })
 
 // Export aliases to satisfy both import naming conventions across files
 export const importFromSheet = importCompanies;
+
+/**
+ * Server-side resume document parser.
+ * Handles PDF fonts, Type 1/TrueType font tables, Word DOCX documents, and UTF-8 text.
+ * Strips non-printable control characters, font stream glyph bytes, and binary artifacts
+ * so resumes render crisply as human-readable text without icon symbols.
+ */
+export const parseUploadedResume = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        fileBase64: z.string(),
+        fileName: z.string(),
+        mimeType: z.string().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const buffer = Buffer.from(data.fileBase64, "base64");
+    const name = data.fileName.toLowerCase();
+    let text = "";
+
+    const isPdf = name.endsWith(".pdf") || buffer.slice(0, 4).toString() === "%PDF";
+    const isDocx =
+      name.endsWith(".docx") ||
+      name.endsWith(".doc") ||
+      buffer.slice(0, 4).toString() === "PK\x03\x04";
+
+    if (isPdf) {
+      try {
+        const pdfModule = (await import("pdf-parse")) as {
+          PDFParse?: new (opts: { data: Buffer }) => {
+            getText: () => Promise<{ text?: string; pages?: { text?: string }[] } | string>;
+          };
+          default?: (b: Buffer) => Promise<{ text?: string }>;
+        };
+        const PDFParseClass = pdfModule.PDFParse;
+        if (typeof PDFParseClass === "function") {
+          const parser = new PDFParseClass({ data: buffer });
+          const res = await parser.getText();
+          if (typeof res === "string") {
+            text = res;
+          } else if (res && typeof res.text === "string") {
+            text = res.text;
+          } else if (res?.pages && Array.isArray(res.pages)) {
+            text = res.pages.map((p) => p?.text || "").join("\n\n");
+          }
+        } else if (typeof pdfModule.default === "function") {
+          const res = await pdfModule.default(buffer);
+          text = res?.text || "";
+        }
+      } catch (err) {
+        console.warn("PDF parser error:", err);
+      }
+    } else if (isDocx) {
+      try {
+        const mammoth = await import("mammoth");
+        const result = await mammoth.extractRawText({ buffer });
+        text = result.value;
+      } catch (err) {
+        console.warn("Mammoth parser error:", err);
+      }
+    }
+
+    if (!text) {
+      // Decode as utf-8 string for txt, md, etc.
+      text = buffer.toString("utf-8");
+    }
+
+    // Clean font glyphs, binary artifacts, private use area icons (FontAwesome/Wingdings), non-printable control codes
+    /* eslint-disable no-control-regex */
+    const cleanText = text
+      .replace(/[\uE000-\uF8FF]/g, " ")
+      .replace(/[\uFFF0-\uFFFF]/g, " ")
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
+      .replace(/\uFB01/g, "fi")
+      .replace(/\uFB02/g, "fl")
+      .replace(/\uFB03/g, "ffi")
+      .replace(/\uFB04/g, "ffl")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2013\u2014]/g, "-")
+      .replace(/[\u2022\u25CF\u25CB\u25AA\u25AB\u2023]/g, "•")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    /* eslint-enable no-control-regex */
+
+    return { text: cleanText, characterCount: cleanText.length };
+  });

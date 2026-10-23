@@ -20,18 +20,32 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Search,
+  SlidersHorizontal,
+  Building2,
+  Briefcase,
+  X,
+  RotateCcw,
+  ArrowUpDown,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { daysSince, isRemote, getExactJobPostingUrl, type Job } from "@/lib/data";
 import { scanCompany, rescoreJob, rescoreAllJobs, tailorResumeForJob } from "@/lib/jobs.functions";
 import { saveOrUpdateFromJob } from "@/lib/applications";
+import { getCompanyIndustry, ALL_INDUSTRIES, type Industry } from "@/lib/industry";
 import { ScoreRing } from "@/components/ScoreRing";
-import { MatchProgressBar } from "@/components/MatchProgressBar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -63,7 +77,12 @@ function JobsPage() {
   const rescore = useServerFn(rescoreJob);
   const [tab, setTab] = useState("open");
   const [q, setQ] = useState("");
+  const [titleCategory, setTitleCategory] = useState("all");
+  const [locPreset, setLocPreset] = useState("all");
   const [loc, setLoc] = useState("");
+  const [industry, setIndustry] = useState<Industry>("All");
+  const [scoreTier, setScoreTier] = useState("all");
+  const [sortBy, setSortBy] = useState("score_desc");
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [selected, setSelected] = useState<Job | null>(null);
   const [tailorTarget, setTailorTarget] = useState<Job | null>(null);
@@ -90,9 +109,9 @@ function JobsPage() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("jobs")
-        .select("*, companies(name)")
+        .select("*, companies(name, careers_url, category)")
         .order("first_seen_at", { ascending: false })
-        .limit(1000);
+        .limit(1500);
       if (error) throw error;
       return data as Job[];
     },
@@ -100,30 +119,134 @@ function JobsPage() {
 
   const list = useMemo(() => {
     let l = (jobs.data ?? []).filter((j) => !j.closed_at || j.status === "applied");
+
+    // Tab filter
     if (tab === "open") l = l.filter((j) => j.status !== "applied");
     if (tab === "applied") l = l.filter((j) => j.status === "applied");
+
+    // Remote only
+    if (remoteOnly) l = l.filter(isRemote);
+
+    // Job Title Category filter
+    if (titleCategory !== "all") {
+      l = l.filter((j) => {
+        const t = (j.title || "").toLowerCase();
+        if (titleCategory === "sdet_qa") {
+          return /sdet|automation|test engineer|qa automation|quality engineer/i.test(t);
+        }
+        if (titleCategory === "manual_qa") {
+          return (
+            /qa\b|quality assurance|tester|test analyst|validation|qc\b/i.test(t) &&
+            !/sdet|automation/i.test(t)
+          );
+        }
+        if (titleCategory === "lead_manager") {
+          return /lead|manager|head|director|principal|staff/i.test(t);
+        }
+        if (titleCategory === "performance_security") {
+          return /performance|load|jmeter|k6|security|penetration/i.test(t);
+        }
+        if (titleCategory === "swe_backend") {
+          return /backend|software engineer|sde|developer|services|golang|java|python|platform/i.test(
+            t,
+          );
+        }
+        if (titleCategory === "frontend_fullstack") {
+          return /frontend|full stack|fullstack|ui engineer|react|web/i.test(t);
+        }
+        if (titleCategory === "devops_cloud") {
+          return /devops|sre|cloud|infrastructure|reliability/i.test(t);
+        }
+        return true;
+      });
+    }
+
+    // Location Preset Filter
+    if (locPreset !== "all") {
+      if (locPreset === "remote") {
+        l = l.filter(isRemote);
+      } else {
+        const s = locPreset.toLowerCase();
+        l = l.filter((j) => (j.location ?? "").toLowerCase().includes(s));
+      }
+    }
+
+    // Custom Location text filter
     if (loc.trim()) {
       const s = loc.trim().toLowerCase();
       l = l.filter((j) => (j.location ?? "").toLowerCase().includes(s));
     }
-    if (remoteOnly) l = l.filter(isRemote);
-    if (q) {
-      const s = q.toLowerCase();
+
+    // Industry filter
+    if (industry !== "All") {
       l = l.filter(
-        (j) => j.title.toLowerCase().includes(s) || j.companies?.name.toLowerCase().includes(s),
+        (j) => getCompanyIndustry(j.companies?.name, j.companies?.category) === industry,
       );
     }
-    return tab === "open" ? [...l].sort((a, b) => (b.score ?? -1) - (a.score ?? -1)) : l;
-  }, [jobs.data, tab, q, loc, remoteOnly]);
+
+    // ATS Match Score Tier filter
+    if (scoreTier !== "all") {
+      if (scoreTier === "90plus") l = l.filter((j) => (j.score ?? 0) >= 90);
+      else if (scoreTier === "80plus") l = l.filter((j) => (j.score ?? 0) >= 80);
+      else if (scoreTier === "60plus") l = l.filter((j) => (j.score ?? 0) >= 60);
+      else if (scoreTier === "under60") l = l.filter((j) => j.score != null && j.score < 60);
+      else if (scoreTier === "unscored") l = l.filter((j) => j.score == null);
+    }
+
+    // Search query filter (matches role title, company name, skills, description)
+    if (q.trim()) {
+      const s = q.trim().toLowerCase();
+      l = l.filter((j) => {
+        const titleMatch = j.title.toLowerCase().includes(s);
+        const companyMatch = (j.companies?.name ?? "").toLowerCase().includes(s);
+        const locMatch = (j.location ?? "").toLowerCase().includes(s);
+        const matchedSkillsMatch = (j.matched_skills ?? []).some((sk) =>
+          sk.toLowerCase().includes(s),
+        );
+        const missingSkillsMatch = (j.missing_skills ?? []).some((sk) =>
+          sk.toLowerCase().includes(s),
+        );
+        return titleMatch || companyMatch || locMatch || matchedSkillsMatch || missingSkillsMatch;
+      });
+    }
+
+    // Sorting
+    return [...l].sort((a, b) => {
+      if (sortBy === "score_desc") return (b.score ?? -1) - (a.score ?? -1);
+      if (sortBy === "score_asc") return (a.score ?? 101) - (b.score ?? 101);
+      if (sortBy === "newest")
+        return new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime();
+      if (sortBy === "oldest")
+        return new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime();
+      if (sortBy === "company_asc")
+        return (a.companies?.name ?? "").localeCompare(b.companies?.name ?? "");
+      return (b.score ?? -1) - (a.score ?? -1);
+    });
+  }, [jobs.data, tab, q, loc, locPreset, titleCategory, industry, scoreTier, sortBy, remoteOnly]);
 
   const counts = {
     open: (jobs.data ?? []).filter((j) => j.status !== "applied" && !j.closed_at).length,
     applied: (jobs.data ?? []).filter((j) => j.status === "applied").length,
   };
 
-  const unscoredCount = useMemo(() => {
-    return (jobs.data ?? []).filter((j) => j.score == null).length;
-  }, [jobs.data]);
+  const hasActiveFilters =
+    q.trim() !== "" ||
+    loc.trim() !== "" ||
+    locPreset !== "all" ||
+    titleCategory !== "all" ||
+    industry !== "All" ||
+    scoreTier !== "all" ||
+    remoteOnly;
+
+  function clearAllFilters() {
+    setQ("");
+    setLoc("");
+    setLocPreset("all");
+    setTitleCategory("all");
+    setIndustry("All");
+    setScoreTier("all");
+    setRemoteOnly(false);
+  }
 
   async function handleScoreAll() {
     setIsScoringAll(true);
@@ -185,14 +308,18 @@ function JobsPage() {
           <h1 className="text-3xl font-extrabold tracking-tight">Open roles</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {unscoredCount > 0 && (
-            <Button variant="outline" size="sm" onClick={handleScoreAll} disabled={isScoringAll}>
-              <Sparkles
-                className={`h-4 w-4 mr-1 text-primary ${isScoringAll ? "animate-spin" : ""}`}
-              />
-              {isScoringAll ? "Scoring…" : `Score all roles (${unscoredCount})`}
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleScoreAll}
+            disabled={isScoringAll}
+            title="Recompute authentic ATS match score across all roles using top-company screening rubric"
+          >
+            <Sparkles
+              className={`h-4 w-4 mr-1 text-primary ${isScoringAll ? "animate-spin" : ""}`}
+            />
+            {isScoringAll ? "Scoring all roles against resume…" : "Re-score all with resume"}
+          </Button>
           <Button variant="ink" onClick={scanAll} disabled={!!progress}>
             <RefreshCw className={progress ? "animate-spin" : ""} />
             {progress ? `Scanning ${progress.done + 1}/${progress.total}` : "Scan now"}
@@ -216,32 +343,211 @@ function JobsPage() {
         </div>
       )}
 
-      <div className="mt-6 flex flex-wrap items-center gap-3">
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            <TabsTrigger value="open">Open roles ({counts.open})</TabsTrigger>
-            <TabsTrigger value="applied">Applied ({counts.applied})</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <Input
-          placeholder="Search role or company"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="max-w-xs bg-card"
-        />
-        <Input
-          placeholder="Location, e.g. Bengaluru"
-          value={loc}
-          onChange={(e) => setLoc(e.target.value)}
-          className="max-w-[200px] bg-card"
-        />
-        <Button
-          variant={remoteOnly ? "ink" : "outline"}
-          size="sm"
-          onClick={() => setRemoteOnly((v) => !v)}
-        >
-          {remoteOnly ? "✓ " : ""}Remote only
-        </Button>
+      {/* Comprehensive Filtering Dashboard System */}
+      <div className="mt-6 space-y-3 rounded-xl border bg-card p-4 shadow-xs">
+        {/* Row 1: Tabs + Search + Remote Toggle */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList>
+              <TabsTrigger value="open">Open roles ({counts.open})</TabsTrigger>
+              <TabsTrigger value="applied">Applied ({counts.applied})</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <div className="flex flex-1 items-center gap-2 min-w-[240px] max-w-md">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search keywords, skills, roles..."
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                className="pl-8 bg-background"
+              />
+              {q && (
+                <button
+                  onClick={() => setQ("")}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <Button
+              variant={remoteOnly ? "ink" : "outline"}
+              size="sm"
+              onClick={() => setRemoteOnly((v) => !v)}
+              className="shrink-0"
+            >
+              {remoteOnly ? "✓ " : ""}Remote only
+            </Button>
+          </div>
+        </div>
+
+        {/* Row 2: Category, Location, Industry, ATS Score, Sort */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
+          {/* 1. Job Title Filter */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+              <Briefcase className="h-3 w-3" /> Job Title
+            </label>
+            <Select value={titleCategory} onValueChange={setTitleCategory}>
+              <SelectTrigger className="w-full h-9 bg-background text-xs">
+                <SelectValue placeholder="All Titles" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Job Titles</SelectItem>
+                <SelectItem value="sdet_qa">SDET & Automation QA</SelectItem>
+                <SelectItem value="manual_qa">QA Engineer & Quality Analyst</SelectItem>
+                <SelectItem value="lead_manager">QA Lead & Engineering Manager</SelectItem>
+                <SelectItem value="performance_security">Performance & Security QA</SelectItem>
+                <SelectItem value="swe_backend">Software Engineer (Backend / SDE)</SelectItem>
+                <SelectItem value="frontend_fullstack">Frontend & Full Stack</SelectItem>
+                <SelectItem value="devops_cloud">DevOps & Cloud SRE</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 2. Location Filter */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+              <MapPin className="h-3 w-3" /> Location
+            </label>
+            <Select value={locPreset} onValueChange={setLocPreset}>
+              <SelectTrigger className="w-full h-9 bg-background text-xs">
+                <SelectValue placeholder="All Locations" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Locations</SelectItem>
+                <SelectItem value="bengaluru">Bengaluru / Bangalore</SelectItem>
+                <SelectItem value="hyderabad">Hyderabad</SelectItem>
+                <SelectItem value="pune">Pune</SelectItem>
+                <SelectItem value="mumbai">Mumbai</SelectItem>
+                <SelectItem value="delhi">Delhi NCR / Gurgaon / Noida</SelectItem>
+                <SelectItem value="chennai">Chennai</SelectItem>
+                <SelectItem value="remote">Remote Only</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 3. Industry Filter */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+              <Building2 className="h-3 w-3" /> Industry
+            </label>
+            <Select value={industry} onValueChange={(val) => setIndustry(val as Industry)}>
+              <SelectTrigger className="w-full h-9 bg-background text-xs">
+                <SelectValue placeholder="All Industries" />
+              </SelectTrigger>
+              <SelectContent>
+                {ALL_INDUSTRIES.map((ind) => (
+                  <SelectItem key={ind} value={ind}>
+                    {ind === "All" ? "All Industries" : ind}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 4. ATS Match Score Tier */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+              <Sparkles className="h-3 w-3" /> ATS Match Score
+            </label>
+            <Select value={scoreTier} onValueChange={setScoreTier}>
+              <SelectTrigger className="w-full h-9 bg-background text-xs">
+                <SelectValue placeholder="All Scores" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Match Scores</SelectItem>
+                <SelectItem value="90plus">90%+ Top-Tier (ATS Pass)</SelectItem>
+                <SelectItem value="80plus">80%+ Strong Fit</SelectItem>
+                <SelectItem value="60plus">60%+ Moderate Fit</SelectItem>
+                <SelectItem value="under60">&lt; 60% Needs Tailoring</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* 5. Sort By */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+              <ArrowUpDown className="h-3 w-3" /> Sort By
+            </label>
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-full h-9 bg-background text-xs">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="score_desc">Highest Match Score</SelectItem>
+                <SelectItem value="score_asc">Lowest Match Score</SelectItem>
+                <SelectItem value="newest">Newest Roles First</SelectItem>
+                <SelectItem value="oldest">Oldest Roles First</SelectItem>
+                <SelectItem value="company_asc">Company Name (A–Z)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Row 3: Active Filters & Summary Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t text-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-semibold text-foreground">
+              Showing {list.length} of {tab === "open" ? counts.open : counts.applied} roles
+            </span>
+
+            {titleCategory !== "all" && (
+              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                Title: {titleCategory.replace(/_/g, " ")}
+                <X className="h-3 w-3 cursor-pointer" onClick={() => setTitleCategory("all")} />
+              </Badge>
+            )}
+
+            {locPreset !== "all" && (
+              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                Location: {locPreset}
+                <X className="h-3 w-3 cursor-pointer" onClick={() => setLocPreset("all")} />
+              </Badge>
+            )}
+
+            {industry !== "All" && (
+              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                Industry: {industry}
+                <X className="h-3 w-3 cursor-pointer" onClick={() => setIndustry("All")} />
+              </Badge>
+            )}
+
+            {scoreTier !== "all" && (
+              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                Score:{" "}
+                {scoreTier === "90plus"
+                  ? "90%+"
+                  : scoreTier === "80plus"
+                    ? "80%+"
+                    : scoreTier === "60plus"
+                      ? "60%+"
+                      : "<60%"}
+                <X className="h-3 w-3 cursor-pointer" onClick={() => setScoreTier("all")} />
+              </Badge>
+            )}
+
+            {remoteOnly && (
+              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                Remote only
+                <X className="h-3 w-3 cursor-pointer" onClick={() => setRemoteOnly(false)} />
+              </Badge>
+            )}
+          </div>
+
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="h-7 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw className="h-3 w-3 mr-1" /> Reset all filters
+            </Button>
+          )}
+        </div>
       </div>
 
       {jobs.isLoading ? (
@@ -258,156 +564,165 @@ function JobsPage() {
           </p>
         </div>
       ) : (
-        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((j) => (
             <div
               key={j.id}
               onClick={() => setSelected(j)}
-              className={`group relative flex flex-col justify-between rounded-xl border bg-card p-4 text-left shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lift cursor-pointer ${j.closed_at ? "opacity-70" : ""}`}
+              className={`group flex flex-col justify-between rounded-xl border bg-card p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift cursor-pointer ${
+                j.closed_at ? "opacity-70" : ""
+              }`}
             >
-              <div className="space-y-2.5">
-                {/* Header: Company Name & Status */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block truncate">
-                      {j.companies?.name || "Company"}
-                    </span>
-                    <h3 className="font-bold text-base leading-snug text-foreground mt-0.5 line-clamp-2">
-                      {j.title}
-                    </h3>
-                  </div>
+              <div>
+                <div className="flex items-start gap-3">
                   {j.status === "applied" ? (
-                    <Badge className="bg-success/15 text-success hover:bg-success/15 shrink-0 text-xs font-medium">
-                      Applied
-                    </Badge>
-                  ) : isRemote(j) ? (
-                    <Badge variant="outline" className="text-[10px] shrink-0 font-normal">
-                      Remote
-                    </Badge>
-                  ) : null}
-                </div>
-
-                {/* Location & Experience Meta */}
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  {j.location && (
-                    <span className="flex items-center gap-1">
-                      <MapPin className="h-3 w-3 shrink-0" /> {j.location}
-                    </span>
-                  )}
-                  {j.experience && <span>• {j.experience}</span>}
-                  <span>• {daysSince(j.first_seen_at)}d ago</span>
-                </div>
-
-                {/* PROGRESS BAR SECTION (Point 1) */}
-                {j.status !== "applied" && (
-                  <div className="rounded-lg border bg-muted/20 p-2.5 space-y-1.5">
-                    <MatchProgressBar score={j.score} size="md" />
-                    {j.score == null && (
-                      <div className="flex items-center justify-between pt-1 text-xs">
-                        <span className="text-muted-foreground text-[11px]">Unscored role</span>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-6 text-[11px] px-2"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleScoreSingle(j);
-                          }}
-                          disabled={scoringSingleId === j.id}
-                        >
-                          <Sparkles
-                            className={`h-3 w-3 mr-1 text-primary ${scoringSingleId === j.id ? "animate-spin" : ""}`}
-                          />
-                          {scoringSingleId === j.id ? "Scoring…" : "Score fit"}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* MISSING SKILLS / KEYWORDS BADGES (Point 4) */}
-                {j.missing_skills && j.missing_skills.length > 0 && j.status !== "applied" && (
-                  <div className="space-y-1 pt-1">
-                    <div className="flex items-center gap-1 text-[11px] font-semibold text-destructive uppercase tracking-wider">
-                      <AlertCircle className="h-3 w-3 shrink-0" /> Missing Keywords (Lowers Score):
+                    <div className="flex h-[52px] w-[52px] shrink-0 flex-col items-center justify-center rounded-full bg-success/15 text-success">
+                      <span className="font-mono text-base font-semibold leading-none">
+                        {daysSince(j.last_seen_at || j.first_seen_at)}
+                      </span>
+                      <span className="text-[10px]">days</span>
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                      {j.missing_skills.slice(0, 4).map((s) => (
+                  ) : (
+                    <ScoreRing score={j.score} size={52} />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-foreground line-clamp-1 group-hover:text-primary transition-colors">
+                      {j.title}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span className="text-sm font-semibold text-foreground/80 truncate">
+                        {j.companies?.name}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground/60">•</span>
+                      <Badge
+                        variant="secondary"
+                        className="text-[10px] py-0 px-1.5 font-normal bg-muted text-muted-foreground truncate"
+                      >
+                        {getCompanyIndustry(j.companies?.name, j.companies?.category)}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {j.status === "applied" ? (
+                        <Badge className="bg-success/15 text-success hover:bg-success/15 text-[10px]">
+                          Applied
+                        </Badge>
+                      ) : j.score != null ? (
                         <Badge
+                          variant={
+                            j.score >= 80 ? "default" : j.score >= 60 ? "secondary" : "outline"
+                          }
+                          className={
+                            j.score >= 80
+                              ? "bg-success/15 text-success hover:bg-success/15 border-0 text-[10px]"
+                              : j.score < 60
+                                ? "text-amber-600 border-amber-500/30 text-[10px]"
+                                : "text-[10px]"
+                          }
+                        >
+                          {j.score >= 80
+                            ? "Strong Fit"
+                            : j.score >= 60
+                              ? "Moderate"
+                              : "Needs Tailoring"}
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Not scored
+                        </Badge>
+                      )}
+                      {isRemote(j) && (
+                        <Badge variant="outline" className="text-[10px]">
+                          Remote
+                        </Badge>
+                      )}
+                      {j.location && (
+                        <span className="truncate text-xs text-muted-foreground">{j.location}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Missing Skills / Keywords on the card */}
+                {j.missing_skills && j.missing_skills.length > 0 && j.status !== "applied" && (
+                  <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-2">
+                    <div className="flex items-center gap-1 text-[11px] font-semibold text-destructive uppercase tracking-wide">
+                      <AlertCircle className="h-3 w-3 shrink-0" />
+                      <span>Missing keywords:</span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {j.missing_skills.slice(0, 3).map((s) => (
+                        <span
                           key={s}
-                          variant="outline"
-                          className="border-destructive/30 bg-destructive/5 text-destructive text-[10px] px-1.5 py-0 font-normal"
+                          className="inline-flex items-center rounded border border-destructive/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-destructive"
                         >
                           + {s}
-                        </Badge>
+                        </span>
                       ))}
-                      {j.missing_skills.length > 4 && (
-                        <span className="text-[10px] text-muted-foreground self-center">
-                          +{j.missing_skills.length - 4} more
+                      {j.missing_skills.length > 3 && (
+                        <span className="self-center text-[10px] font-medium text-destructive">
+                          +{j.missing_skills.length - 3} more
                         </span>
                       )}
                     </div>
                   </div>
                 )}
 
-                {/* MATCHED SKILLS BADGES */}
-                {j.matched_skills && j.matched_skills.length > 0 && j.status !== "applied" && (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1 text-[11px] font-semibold text-success uppercase tracking-wider">
-                      <CheckCircle2 className="h-3 w-3 shrink-0" /> Matched Skills:
+                {/* If no missing skills and matched skills present */}
+                {(!j.missing_skills || j.missing_skills.length === 0) &&
+                  j.matched_skills &&
+                  j.matched_skills.length > 0 &&
+                  j.status !== "applied" && (
+                    <div className="mt-3 rounded-lg border border-success/20 bg-success/5 p-2">
+                      <div className="flex items-center gap-1 text-[11px] font-semibold text-success uppercase tracking-wide">
+                        <CheckCircle2 className="h-3 w-3 shrink-0" />
+                        <span>Matched keywords:</span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {j.matched_skills.slice(0, 3).map((s) => (
+                          <span
+                            key={s}
+                            className="inline-flex items-center rounded border border-success/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-success"
+                          >
+                            ✓ {s}
+                          </span>
+                        ))}
+                        {j.matched_skills.length > 3 && (
+                          <span className="self-center text-[10px] font-medium text-success">
+                            +{j.matched_skills.length - 3} more
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                      {j.matched_skills.slice(0, 3).map((s) => (
-                        <Badge
-                          key={s}
-                          variant="outline"
-                          className="border-success/30 bg-success/5 text-success text-[10px] px-1.5 py-0 font-normal"
-                        >
-                          ✓ {s}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  )}
               </div>
 
-              {/* CARD ACTION FOOTER */}
-              <div className="mt-4 pt-3 border-t flex flex-wrap items-center justify-between gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 text-xs px-2 text-muted-foreground hover:text-foreground"
-                  onClick={() => setSelected(j)}
+              {/* Action buttons directly on the card */}
+              <div className="mt-3.5 pt-3 border-t flex items-center justify-between gap-2">
+                <a
+                  href={getExactJobPostingUrl(j)}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline hover:text-primary/80"
+                  title="Open company career home page where this role was found"
                 >
-                  Details
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>View posting</span>
+                </a>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs px-2.5 font-medium border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setTailorTarget(j);
+                  }}
+                  title="Rebuild resume for 95%+ match against this role"
+                >
+                  <Sparkles className="h-3 w-3 mr-1 text-purple-600" />
+                  <span>Rebuild (95%+)</span>
                 </Button>
-
-                <div className="flex items-center gap-1.5">
-                  <Button variant="outline" size="sm" className="h-8 text-xs px-2.5" asChild>
-                    <a
-                      href={getExactJobPostingUrl(j)}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      title="Open exact job posting in new tab"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5 mr-1" /> View posting
-                    </a>
-                  </Button>
-
-                  {j.status !== "applied" && (
-                    <Button
-                      size="sm"
-                      className="h-8 text-xs font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white shadow-sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTailorTarget(j);
-                      }}
-                    >
-                      <Sparkles className="h-3.5 w-3.5 mr-1" /> Rebuild
-                    </Button>
-                  )}
-                </div>
               </div>
             </div>
           ))}
@@ -499,7 +814,12 @@ function JobSheet({
         {job && (
           <>
             <SheetHeader>
-              <div className="label-mono">{job.companies?.name}</div>
+              <div className="flex items-center gap-2">
+                <span className="label-mono">{job.companies?.name}</span>
+                <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-normal">
+                  {getCompanyIndustry(job.companies?.name, job.companies?.category)}
+                </Badge>
+              </div>
               <SheetTitle className="text-2xl font-extrabold leading-tight">{job.title}</SheetTitle>
             </SheetHeader>
             <div className="mt-2 flex flex-wrap gap-3 px-4 text-sm text-muted-foreground">
@@ -532,31 +852,51 @@ function JobSheet({
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                      Resume Match Assessment
-                    </span>
+                <div className="flex items-center gap-4">
+                  <ScoreRing score={job.score} size={84} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                        Resume Match Score
+                      </span>
+                      {job.score != null && (
+                        <Badge
+                          variant={
+                            job.score >= 80 ? "default" : job.score >= 60 ? "secondary" : "outline"
+                          }
+                          className={
+                            job.score >= 80
+                              ? "bg-success text-success-foreground text-[10px]"
+                              : "text-[10px]"
+                          }
+                        >
+                          {job.score >= 80
+                            ? "Strong Fit"
+                            : job.score >= 60
+                              ? "Moderate Match"
+                              : "Needs Tailoring"}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm leading-snug">
+                      {job.score_summary ??
+                        "Not scored against your resume yet. Click score now to evaluate."}
+                    </p>
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="h-7 text-xs px-2 text-primary hover:text-primary"
+                      className="mt-1 -ml-2 text-xs text-primary hover:text-primary"
                       onClick={doRescore}
                       disabled={busy}
                     >
-                      <Sparkles className={`h-3.5 w-3.5 mr-1 ${busy ? "animate-spin" : ""}`} />
-                      {busy ? "Scoring…" : job.score == null ? "Score with resume" : "Re-score"}
+                      <Sparkles className={`h-3.5 w-3.5 mr-1 ${busy ? "animate-spin" : ""}`} />{" "}
+                      {busy
+                        ? "Scoring…"
+                        : job.score == null
+                          ? "Score against my resume"
+                          : "Re-score"}
                     </Button>
                   </div>
-
-                  {/* Prominent Progress Bar */}
-                  <MatchProgressBar score={job.score} size="lg" />
-
-                  {job.score_summary && (
-                    <p className="text-xs text-muted-foreground leading-relaxed rounded-lg bg-muted/30 p-2.5 border">
-                      {job.score_summary}
-                    </p>
-                  )}
                 </div>
               )}
             </div>
@@ -657,9 +997,9 @@ function JobSheet({
                   href={getExactJobPostingUrl(job)}
                   target="_blank"
                   rel="noreferrer"
-                  title="Open exact job posting in new tab"
+                  title="Open company career home page where this role was found"
                 >
-                  <ExternalLink className="h-4 w-4 mr-1.5" /> View exact posting
+                  <ExternalLink className="h-4 w-4 mr-1.5" /> View posting
                 </a>
               </Button>
             </div>
@@ -786,35 +1126,36 @@ function TailorResumeDialog({
           </div>
         ) : result ? (
           <div className="space-y-4 py-2">
-            {/* Score Transformation Card with Dual Progress Bars */}
-            <div className="rounded-xl border bg-muted/30 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2.5">
-                <div className="flex items-center gap-1.5 rounded-lg border bg-background px-2.5 py-1 text-xs text-muted-foreground">
-                  <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span className="font-medium text-foreground">100% Defensible in Interview</span>
+            {/* Score Transformation Card with Circular Score Rings */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/30 p-3.5">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2.5">
+                  <ScoreRing score={job?.score} size={54} />
+                  <div>
+                    <div className="text-[10px] font-semibold text-muted-foreground uppercase">
+                      Current Score
+                    </div>
+                    <div className="text-xs font-bold text-foreground">
+                      {job?.score != null ? `${job.score}%` : "Not evaluated"}
+                    </div>
+                  </div>
                 </div>
-                <Badge
-                  variant="outline"
-                  className="text-xs bg-success/10 text-success border-success/30 font-semibold"
-                >
-                  Target: 95%+ ATS Score
-                </Badge>
+                <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-2.5">
+                  <ScoreRing score={result.projectedScore} size={54} />
+                  <div>
+                    <div className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase">
+                      Rebuilt Score
+                    </div>
+                    <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                      {result.projectedScore}%
+                    </div>
+                  </div>
+                </div>
               </div>
-
-              <div className="grid sm:grid-cols-2 gap-3 pt-1">
-                <div className="rounded-lg border bg-background p-2.5 space-y-1">
-                  <div className="text-[11px] font-semibold text-muted-foreground uppercase">
-                    Your Current Match
-                  </div>
-                  <MatchProgressBar score={job?.score} size="sm" />
-                </div>
-                <div className="rounded-lg border bg-background p-2.5 space-y-1 border-emerald-500/40">
-                  <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase flex items-center justify-between">
-                    <span>Rebuilt Defensible Match</span>
-                    <Sparkles className="h-3 w-3 text-emerald-500" />
-                  </div>
-                  <MatchProgressBar score={result.projectedScore} size="sm" />
-                </div>
+              <div className="flex items-center gap-1.5 rounded-lg border bg-background px-2.5 py-1 text-xs text-muted-foreground">
+                <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+                <span>100% Defensible in Interview</span>
               </div>
             </div>
 

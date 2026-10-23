@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthRouteImport } from './routes/auth'
+import { Route as AuthenticatedApplicationsRouteImport } from './routes/_authenticated/applications'
 import { Route as AuthenticatedCompaniesRouteImport } from './routes/_authenticated/companies'
 import { Route as AuthenticatedJobsRouteImport } from './routes/_authenticated/jobs'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
@@ -31,6 +32,12 @@ const AuthRoute = AuthRouteImport.update({
   path: '/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedApplicationsRoute =
+  AuthenticatedApplicationsRouteImport.update({
+    id: '/applications',
+    path: '/applications',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedCompaniesRoute = AuthenticatedCompaniesRouteImport.update({
   id: '/companies',
   path: '/companies',
@@ -56,6 +63,7 @@ const ApiPublicHooksScheduledScanRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/applications': typeof AuthenticatedApplicationsRoute
   '/companies': typeof AuthenticatedCompaniesRoute
   '/jobs': typeof AuthenticatedJobsRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -64,6 +72,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/applications': typeof AuthenticatedApplicationsRoute
   '/companies': typeof AuthenticatedCompaniesRoute
   '/jobs': typeof AuthenticatedJobsRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -74,6 +83,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
+  '/_authenticated/applications': typeof AuthenticatedApplicationsRoute
   '/_authenticated/companies': typeof AuthenticatedCompaniesRoute
   '/_authenticated/jobs': typeof AuthenticatedJobsRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
@@ -84,6 +94,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/auth'
+    | '/applications'
     | '/companies'
     | '/jobs'
     | '/settings'
@@ -92,6 +103,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/auth'
+    | '/applications'
     | '/companies'
     | '/jobs'
     | '/settings'
@@ -101,6 +113,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_authenticated'
     | '/auth'
+    | '/_authenticated/applications'
     | '/_authenticated/companies'
     | '/_authenticated/jobs'
     | '/_authenticated/settings'
@@ -137,6 +150,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/applications': {
+      id: '/_authenticated/applications'
+      path: '/applications'
+      fullPath: '/applications'
+      preLoaderRoute: typeof AuthenticatedApplicationsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/companies': {
       id: '/_authenticated/companies'
       path: '/companies'
@@ -169,12 +189,14 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthenticatedRouteRouteChildren {
+  AuthenticatedApplicationsRoute: typeof AuthenticatedApplicationsRoute
   AuthenticatedCompaniesRoute: typeof AuthenticatedCompaniesRoute
   AuthenticatedJobsRoute: typeof AuthenticatedJobsRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedApplicationsRoute: AuthenticatedApplicationsRoute,
   AuthenticatedCompaniesRoute: AuthenticatedCompaniesRoute,
   AuthenticatedJobsRoute: AuthenticatedJobsRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,

@@ -2,6 +2,7 @@ import dns from "node:dns";
 import { GoogleGenAI } from "@google/genai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
+import { computeATSScore } from "./ats-score";
 
 // Force IPv4 first to prevent hanging on IPv6 in container environment
 try {
@@ -681,9 +682,8 @@ export function makeExactPostingUrl(
     return `https://career.infosys.com/joblist?keyword=${encodeURIComponent(cleanTitle)}`;
   }
 
-  // Precision Google Jobs deep link (&ibp=htl;jobs) - opens the exact job posting modal with description and direct "Apply on Company Site"
-  const q = [companyName, cleanTitle, location, "career job posting"].filter(Boolean).join(" ");
-  return `https://www.google.com/search?q=${encodeURIComponent(q)}&ibp=htl;jobs`;
+  // Return the career home page where the job opening was found
+  return rawUrl.replace(/#job-\d+/i, "").trim() || careersUrl;
 }
 
 export async function extractJobs(
@@ -768,23 +768,20 @@ export async function scoreJobs(
   jobs: { title: string; description: string | null }[],
 ): Promise<Score[]> {
   if (!resume.trim() || jobs.length === 0) return [];
-  const list = jobs.map((j, i) => `#${i}\nTitle: ${j.title}\n${j.description ?? ""}`).join("\n\n");
 
-  const prompt = `You are an ATS resume screener. For each job, score 0-100 how well the resume fits the job description (skills, tools, experience level). Return valid JSON matching this schema: {"scores": [{"index": number, "score": number, "summary": "string", "matched": ["string"], "missing": ["string"]}]}.
-  
-RESUME:
-${resume.slice(0, 8000)}
+  // Compute baseline using enterprise ATS rubric immediately
+  const scores: Score[] = jobs.map((j, i) => {
+    const res = computeATSScore(resume, j.title, j.description);
+    return {
+      index: i,
+      score: res.score,
+      summary: res.summary,
+      matched: res.matched,
+      missing: res.missing,
+    };
+  });
 
-JOBS:
-${list}`;
-
-  try {
-    const r = await geminiJson<{ scores: Score[] }>(prompt, "scores array");
-    return r.scores ?? [];
-  } catch (e) {
-    console.warn("Gemini scoring warning:", e);
-    return [];
-  }
+  return scores;
 }
 
 /** Scans one tracked company for a user using verified database schema. */
