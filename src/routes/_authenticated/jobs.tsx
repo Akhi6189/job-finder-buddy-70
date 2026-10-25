@@ -30,7 +30,14 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { daysSince, isRemote, getExactJobPostingUrl, type Job } from "@/lib/data";
-import { scanCompany, rescoreJob, rescoreAllJobs, tailorResumeForJob } from "@/lib/jobs.functions";
+import { matchLocation, matchTitleCategory, matchJobSearchQuery } from "@/lib/job-filters";
+import {
+  scanCompany,
+  rescoreJob,
+  rescoreAllJobs,
+  tailorResumeForJob,
+  validateActiveJobs,
+} from "@/lib/jobs.functions";
 import { saveOrUpdateFromJob } from "@/lib/applications";
 import { getCompanyIndustry, ALL_INDUSTRIES, type Industry } from "@/lib/industry";
 import { ScoreRing } from "@/components/ScoreRing";
@@ -75,6 +82,7 @@ function JobsPage() {
   const scan = useServerFn(scanCompany);
   const scoreAll = useServerFn(rescoreAllJobs);
   const rescore = useServerFn(rescoreJob);
+  const validate = useServerFn(validateActiveJobs);
   const [tab, setTab] = useState("open");
   const [q, setQ] = useState("");
   const [titleCategory, setTitleCategory] = useState("all");
@@ -87,6 +95,7 @@ function JobsPage() {
   const [selected, setSelected] = useState<Job | null>(null);
   const [tailorTarget, setTailorTarget] = useState<Job | null>(null);
   const [isScoringAll, setIsScoringAll] = useState(false);
+  const [isValidatingUrls, setIsValidatingUrls] = useState(false);
   const [scoringSingleId, setScoringSingleId] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(
     null,
@@ -96,6 +105,20 @@ function JobsPage() {
     setScoringSingleId(job.id);
     try {
       const r = await rescore({ data: { jobId: job.id } });
+      qc.setQueryData<Job[]>(["jobs"], (old) => {
+        if (!old) return old;
+        return old.map((j) =>
+          j.id === job.id
+            ? {
+                ...j,
+                score: r.score,
+                score_summary: r.summary,
+                matched_skills: r.matched,
+                missing_skills: r.missing,
+              }
+            : j,
+        );
+      });
       toast.success(`Scored: ${r.score}% resume match`);
       qc.invalidateQueries({ queryKey: ["jobs"] });
     } catch (e) {
@@ -110,6 +133,7 @@ function JobsPage() {
       const { data, error } = await supabase
         .from("jobs")
         .select("*, companies(name, careers_url, category)")
+        .neq("status", "inactive")
         .order("first_seen_at", { ascending: false })
         .limit(1500);
       if (error) throw error;
@@ -118,10 +142,12 @@ function JobsPage() {
   });
 
   const list = useMemo(() => {
-    let l = (jobs.data ?? []).filter((j) => !j.closed_at || j.status === "applied");
+    let l = (jobs.data ?? []).filter(
+      (j) => j.status !== "inactive" && (!j.closed_at || j.status === "applied"),
+    );
 
     // Tab filter
-    if (tab === "open") l = l.filter((j) => j.status !== "applied");
+    if (tab === "open") l = l.filter((j) => j.status !== "applied" && j.status !== "inactive");
     if (tab === "applied") l = l.filter((j) => j.status === "applied");
 
     // Remote only
@@ -129,52 +155,19 @@ function JobsPage() {
 
     // Job Title Category filter
     if (titleCategory !== "all") {
-      l = l.filter((j) => {
-        const t = (j.title || "").toLowerCase();
-        if (titleCategory === "sdet_qa") {
-          return /sdet|automation|test engineer|qa automation|quality engineer/i.test(t);
-        }
-        if (titleCategory === "manual_qa") {
-          return (
-            /qa\b|quality assurance|tester|test analyst|validation|qc\b/i.test(t) &&
-            !/sdet|automation/i.test(t)
-          );
-        }
-        if (titleCategory === "lead_manager") {
-          return /lead|manager|head|director|principal|staff/i.test(t);
-        }
-        if (titleCategory === "performance_security") {
-          return /performance|load|jmeter|k6|security|penetration/i.test(t);
-        }
-        if (titleCategory === "swe_backend") {
-          return /backend|software engineer|sde|developer|services|golang|java|python|platform/i.test(
-            t,
-          );
-        }
-        if (titleCategory === "frontend_fullstack") {
-          return /frontend|full stack|fullstack|ui engineer|react|web/i.test(t);
-        }
-        if (titleCategory === "devops_cloud") {
-          return /devops|sre|cloud|infrastructure|reliability/i.test(t);
-        }
-        return true;
-      });
+      l = l.filter((j) =>
+        matchTitleCategory(j.title, titleCategory, j.description, j.matched_skills),
+      );
     }
 
     // Location Preset Filter
     if (locPreset !== "all") {
-      if (locPreset === "remote") {
-        l = l.filter(isRemote);
-      } else {
-        const s = locPreset.toLowerCase();
-        l = l.filter((j) => (j.location ?? "").toLowerCase().includes(s));
-      }
+      l = l.filter((j) => matchLocation(j.location, locPreset));
     }
 
     // Custom Location text filter
     if (loc.trim()) {
-      const s = loc.trim().toLowerCase();
-      l = l.filter((j) => (j.location ?? "").toLowerCase().includes(s));
+      l = l.filter((j) => matchLocation(j.location, loc.trim()));
     }
 
     // Industry filter
@@ -195,19 +188,7 @@ function JobsPage() {
 
     // Search query filter (matches role title, company name, skills, description)
     if (q.trim()) {
-      const s = q.trim().toLowerCase();
-      l = l.filter((j) => {
-        const titleMatch = j.title.toLowerCase().includes(s);
-        const companyMatch = (j.companies?.name ?? "").toLowerCase().includes(s);
-        const locMatch = (j.location ?? "").toLowerCase().includes(s);
-        const matchedSkillsMatch = (j.matched_skills ?? []).some((sk) =>
-          sk.toLowerCase().includes(s),
-        );
-        const missingSkillsMatch = (j.missing_skills ?? []).some((sk) =>
-          sk.toLowerCase().includes(s),
-        );
-        return titleMatch || companyMatch || locMatch || matchedSkillsMatch || missingSkillsMatch;
-      });
+      l = l.filter((j) => matchJobSearchQuery(j, q));
     }
 
     // Sorting
@@ -246,6 +227,26 @@ function JobsPage() {
     setIndustry("All");
     setScoreTier("all");
     setRemoteOnly(false);
+  }
+
+  async function handleValidateUrls() {
+    setIsValidatingUrls(true);
+    try {
+      const r = await validate();
+      if (r.prunedCount > 0) {
+        toast.success(
+          `Validation complete: ${r.activeCount} active roles verified, ${r.prunedCount} dead or closed role${r.prunedCount === 1 ? "" : "s"} removed.`,
+        );
+      } else {
+        toast.success(
+          `Verified: All ${r.activeCount} open roles have active, live application URLs!`,
+        );
+      }
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Validation check failed");
+    }
+    setIsValidatingUrls(false);
   }
 
   async function handleScoreAll() {
@@ -298,6 +299,9 @@ function JobsPage() {
         ? `Couldn't read: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`
         : undefined,
     });
+
+    // Auto-trigger URL status verification on newly found roles
+    validate().catch(() => {});
   }
 
   return (
@@ -311,8 +315,20 @@ function JobsPage() {
           <Button
             variant="outline"
             size="sm"
+            onClick={handleValidateUrls}
+            disabled={isValidatingUrls || isScoringAll || !!progress}
+            title="Run server-side validation script to check HTTP status codes and ensure only active roles are shown"
+          >
+            <ShieldCheck
+              className={`h-4 w-4 mr-1 text-emerald-600 ${isValidatingUrls ? "animate-spin" : ""}`}
+            />
+            {isValidatingUrls ? "Verifying active URLs…" : "Verify Live URLs"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleScoreAll}
-            disabled={isScoringAll}
+            disabled={isScoringAll || isValidatingUrls || !!progress}
             title="Recompute authentic ATS match score across all roles using top-company screening rubric"
           >
             <Sparkles
@@ -320,7 +336,7 @@ function JobsPage() {
             />
             {isScoringAll ? "Scoring all roles against resume…" : "Re-score all with resume"}
           </Button>
-          <Button variant="ink" onClick={scanAll} disabled={!!progress}>
+          <Button variant="ink" onClick={scanAll} disabled={!!progress || isValidatingUrls}>
             <RefreshCw className={progress ? "animate-spin" : ""} />
             {progress ? `Scanning ${progress.done + 1}/${progress.total}` : "Scan now"}
           </Button>
@@ -396,9 +412,10 @@ function JobsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Job Titles</SelectItem>
+                <SelectItem value="all_qa">All QA, SDET & Test Roles (Recommended)</SelectItem>
                 <SelectItem value="sdet_qa">SDET & Automation QA</SelectItem>
                 <SelectItem value="manual_qa">QA Engineer & Quality Analyst</SelectItem>
-                <SelectItem value="lead_manager">QA Lead & Engineering Manager</SelectItem>
+                <SelectItem value="lead_manager">QA Lead & QA/Test Manager</SelectItem>
                 <SelectItem value="performance_security">Performance & Security QA</SelectItem>
                 <SelectItem value="swe_backend">Software Engineer (Backend / SDE)</SelectItem>
                 <SelectItem value="frontend_fullstack">Frontend & Full Stack</SelectItem>
@@ -496,14 +513,28 @@ function JobsPage() {
 
             {titleCategory !== "all" && (
               <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Title: {titleCategory.replace(/_/g, " ")}
+                Title:{" "}
+                {titleCategory === "all_qa"
+                  ? "All QA & SDET"
+                  : titleCategory === "sdet_qa"
+                    ? "SDET & Automation"
+                    : titleCategory === "manual_qa"
+                      ? "QA & Quality Analyst"
+                      : titleCategory === "lead_manager"
+                        ? "QA Lead & Manager"
+                        : titleCategory.replace(/_/g, " ")}
                 <X className="h-3 w-3 cursor-pointer" onClick={() => setTitleCategory("all")} />
               </Badge>
             )}
 
             {locPreset !== "all" && (
               <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Location: {locPreset}
+                Location:{" "}
+                {locPreset === "bengaluru"
+                  ? "Bengaluru / Bangalore"
+                  : locPreset === "delhi"
+                    ? "Delhi NCR / Gurgaon"
+                    : locPreset.charAt(0).toUpperCase() + locPreset.slice(1)}
                 <X className="h-3 w-3 cursor-pointer" onClick={() => setLocPreset("all")} />
               </Badge>
             )}
@@ -793,12 +824,17 @@ function JobSheet({
     setBusy(true);
     try {
       const r = await rescore({ data: { jobId: job.id } });
-      onChange({
+      const updatedJob: Job = {
         ...job,
         score: r.score,
         score_summary: r.summary,
         matched_skills: r.matched,
         missing_skills: r.missing,
+      };
+      onChange(updatedJob);
+      qc.setQueryData<Job[]>(["jobs"], (old) => {
+        if (!old) return old;
+        return old.map((j) => (j.id === job.id ? updatedJob : j));
       });
       qc.invalidateQueries({ queryKey: ["jobs"] });
       toast.success(`Score updated: ${r.score}% match`);

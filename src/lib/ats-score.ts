@@ -18,6 +18,20 @@ export interface ATSResult {
   missing: string[];
 }
 
+export const DEFAULT_SDET_RESUME = `Akhil Bhadran
+Senior SDET / QA Automation Engineer | Bengaluru, India
+Email: Akhird06@gmail.com
+
+SUMMARY:
+Results-driven Senior QA Automation Engineer / SDET with 6+ years of experience in designing, building, and maintaining scalable test automation frameworks for web, mobile, and distributed microservices. Expert in Java, Python, Selenium, Playwright, Cypress, RestAssured, and CI/CD pipelines.
+
+TECHNICAL SKILLS:
+- Languages: Java, Python, TypeScript, JavaScript, SQL
+- Automation & Testing: Selenium WebDriver, Playwright, Cypress, RestAssured, Postman, Appium, Cucumber (BDD), TestNG, JUnit
+- Architecture & APIs: REST APIs, Microservices, Distributed Systems, GraphQL, Kafka, JSON
+- CI/CD & DevOps: Jenkins, GitHub Actions, GitLab CI, Docker, Kubernetes, AWS, Git, Linux
+- Methodologies: Page Object Model (POM), BDD, TDD, Agile/Scrum, Performance Testing (JMeter), Root Cause Analysis, Regression Testing`;
+
 export interface SkillDefinition {
   key: string;
   label: string;

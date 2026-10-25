@@ -509,3 +509,14 @@ export const parseUploadedResume = createServerFn({ method: "POST" })
 
     return { text: cleanText, characterCount: cleanText.length };
   });
+
+export const validateActiveJobs = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { validateAndPruneJobsServer } = await import("./validate-job-url.server");
+    const summary = await validateAndPruneJobsServer(context.supabase, {
+      userId: context.userId,
+      pruneImmediately: true,
+    });
+    return summary;
+  });

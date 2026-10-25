@@ -78,6 +78,15 @@ export const Route = createFileRoute("/api/public/hooks/scheduled-scan")({
             .eq("user_id", s.user_id);
           summary[s.user_id] = done;
         }
+
+        // Run server-side validation to ensure all job URLs remain active
+        try {
+          const { validateAndPruneJobsServer } = await import("@/lib/validate-job-url.server");
+          await validateAndPruneJobsServer(supabaseAdmin, { pruneImmediately: true });
+        } catch (err) {
+          console.warn("Scheduled URL validation warning:", err);
+        }
+
         return Response.json({ ok: true, summary });
       },
     },
