@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "validate:jobs": "tsx scripts/validate-jobs.ts"
+    "validate:jobs": "tsx scripts/validate-jobs.ts",
+    "diagnostic:scraper": "tsx scripts/diagnostic-scraper.ts"
   },
   "overrides": {
     "rolldown": "1.2.1"

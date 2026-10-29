@@ -1,12 +1,25 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { X, Upload, FileText, CheckCircle2, Loader2 } from "lucide-react";
+import {
+  X,
+  Upload,
+  FileText,
+  CheckCircle2,
+  Loader2,
+  Globe,
+  Sparkles,
+  ExternalLink,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { loadSettings } from "@/lib/data";
-import { parseUploadedResume, rescoreAllJobs } from "@/lib/jobs.functions";
+import {
+  parseUploadedResume,
+  rescoreAllJobs,
+  analyzeLinkedInProfileFn,
+} from "@/lib/jobs.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,6 +68,23 @@ function SettingsPage() {
 
   const parseResume = useServerFn(parseUploadedResume);
   const rescoreAll = useServerFn(rescoreAllJobs);
+  const analyzeProfile = useServerFn(analyzeLinkedInProfileFn);
+
+  const [linkedinUrl, setLinkedinUrl] = useState(() => {
+    return (
+      localStorage.getItem("roleradar_linkedin_url") || "https://www.linkedin.com/in/akhil-bhadran/"
+    );
+  });
+  const [isAnalyzingLinkedIn, setIsAnalyzingLinkedIn] = useState(false);
+  const [linkedinHeadline, setLinkedinHeadline] = useState(() => {
+    try {
+      const p = localStorage.getItem("roleradar_linkedin_profile");
+      if (p) return JSON.parse(p).headline;
+    } catch {
+      // ignore
+    }
+    return "Senior SDET / QA Automation Engineer | Bengaluru, India";
+  });
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -139,6 +169,40 @@ function SettingsPage() {
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleAnalyzeLinkedIn() {
+    if (!linkedinUrl.trim()) {
+      toast.error("Please enter your LinkedIn profile URL");
+      return;
+    }
+    setIsAnalyzingLinkedIn(true);
+    const toastId = toast.loading("Analyzing LinkedIn profile & extracting skills…");
+    try {
+      const res = await analyzeProfile({
+        data: {
+          profileUrl: linkedinUrl.trim(),
+          profileText: resume,
+        },
+      });
+      localStorage.setItem("roleradar_linkedin_profile", JSON.stringify(res));
+      localStorage.setItem("roleradar_linkedin_url", linkedinUrl.trim());
+      setLinkedinHeadline(res.headline);
+      if (res.targetRoles?.length) {
+        const mergedRoles = Array.from(new Set([...roles, ...res.targetRoles]));
+        setRoles(mergedRoles);
+      }
+      if (res.formattedResume) {
+        setResume(res.formattedResume.slice(0, 20000));
+      }
+      toast.success("LinkedIn profile analyzed and synced with resume!", { id: toastId });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to analyze LinkedIn profile", {
+        id: toastId,
+      });
+    } finally {
+      setIsAnalyzingLinkedIn(false);
     }
   }
 
@@ -247,6 +311,72 @@ function SettingsPage() {
             </button>
           ))}
         </div>
+      </section>
+
+      {/* LinkedIn Profile Card */}
+      <section className="rounded-xl border bg-card p-5 shadow-card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="font-semibold text-lg flex items-center gap-2">
+                <Globe className="h-5 w-5 text-blue-500" /> LinkedIn Profile
+              </h2>
+              <Badge
+                variant="outline"
+                className="text-xs bg-blue-500/10 text-blue-600 dark:text-blue-400"
+              >
+                Connected
+              </Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Used to match your professional background, verified skills, and headline against open
+              roles.
+            </p>
+          </div>
+
+          <Link
+            to="/jobs"
+            search={{ tab: "linkedin" }}
+            className="inline-flex items-center gap-1.5 rounded-md border bg-accent/50 px-3 py-1.5 text-xs font-semibold text-accent-foreground hover:bg-accent transition-colors"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-blue-500" /> Open LinkedIn Matcher →
+          </Link>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Input
+            placeholder="https://www.linkedin.com/in/your-profile"
+            value={linkedinUrl}
+            onChange={(e) => {
+              setLinkedinUrl(e.target.value);
+              localStorage.setItem("roleradar_linkedin_url", e.target.value);
+            }}
+            className="flex-1 text-sm font-sans"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={isAnalyzingLinkedIn}
+            onClick={handleAnalyzeLinkedIn}
+            className="whitespace-nowrap"
+          >
+            {isAnalyzingLinkedIn ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4 mr-1.5 text-blue-500" />
+            )}
+            Analyze & Sync to Resume
+          </Button>
+        </div>
+
+        {linkedinHeadline && (
+          <div className="rounded-lg border bg-muted/20 p-2.5 text-xs">
+            <span className="font-semibold text-muted-foreground uppercase text-[10px]">
+              Headline:{" "}
+            </span>
+            <span className="font-medium text-foreground">{linkedinHeadline}</span>
+          </div>
+        )}
       </section>
 
       <section className="rounded-xl border bg-card p-5 shadow-card space-y-3">

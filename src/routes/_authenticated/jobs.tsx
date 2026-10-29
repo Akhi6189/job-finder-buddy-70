@@ -29,7 +29,7 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { daysSince, isRemote, getExactJobPostingUrl, type Job } from "@/lib/data";
+import { daysSince, isRemote, getExactJobPostingUrl, loadSettings, type Job } from "@/lib/data";
 import { matchLocation, matchTitleCategory, matchJobSearchQuery } from "@/lib/job-filters";
 import {
   scanCompany,
@@ -41,6 +41,7 @@ import {
 import { saveOrUpdateFromJob } from "@/lib/applications";
 import { getCompanyIndustry, ALL_INDUSTRIES, type Industry } from "@/lib/industry";
 import { ScoreRing } from "@/components/ScoreRing";
+import { LinkedInProfileMatcher } from "@/components/LinkedInProfileMatcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +65,9 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 export const Route = createFileRoute("/_authenticated/jobs")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: typeof search["tab"] === "string" ? search["tab"] : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Open roles — RoleRadar" },
@@ -79,11 +83,20 @@ export const Route = createFileRoute("/_authenticated/jobs")({
 
 function JobsPage() {
   const qc = useQueryClient();
+  const searchParams = Route.useSearch();
   const scan = useServerFn(scanCompany);
   const scoreAll = useServerFn(rescoreAllJobs);
   const rescore = useServerFn(rescoreJob);
   const validate = useServerFn(validateActiveJobs);
-  const [tab, setTab] = useState("open");
+  const [tab, setTab] = useState(searchParams?.tab || "open");
+
+  useEffect(() => {
+    if (searchParams?.tab) {
+      setTab(searchParams.tab);
+    }
+  }, [searchParams?.tab]);
+
+  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: loadSettings });
   const [q, setQ] = useState("");
   const [titleCategory, setTitleCategory] = useState("all");
   const [locPreset, setLocPreset] = useState("all");
@@ -359,405 +372,440 @@ function JobsPage() {
         </div>
       )}
 
-      {/* Comprehensive Filtering Dashboard System */}
-      <div className="mt-6 space-y-3 rounded-xl border bg-card p-4 shadow-xs">
-        {/* Row 1: Tabs + Search + Remote Toggle */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList>
-              <TabsTrigger value="open">Open roles ({counts.open})</TabsTrigger>
-              <TabsTrigger value="applied">Applied ({counts.applied})</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          <div className="flex flex-1 items-center gap-2 min-w-[240px] max-w-md">
-            <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search keywords, skills, roles..."
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                className="pl-8 bg-background"
-              />
-              {q && (
-                <button
-                  onClick={() => setQ("")}
-                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-            <Button
-              variant={remoteOnly ? "ink" : "outline"}
-              size="sm"
-              onClick={() => setRemoteOnly((v) => !v)}
-              className="shrink-0"
+      {/* Navigation Tabs Bar */}
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="open">Open roles ({counts.open})</TabsTrigger>
+            <TabsTrigger
+              value="linkedin"
+              className="gap-1.5 font-medium text-blue-600 dark:text-blue-400 data-[state=active]:bg-blue-500/15 data-[state=active]:text-blue-600"
             >
-              {remoteOnly ? "✓ " : ""}Remote only
-            </Button>
-          </div>
-        </div>
+              <Sparkles className="h-3.5 w-3.5" /> LinkedIn Match
+            </TabsTrigger>
+            <TabsTrigger value="applied">Applied ({counts.applied})</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-        {/* Row 2: Category, Location, Industry, ATS Score, Sort */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
-          {/* 1. Job Title Filter */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-              <Briefcase className="h-3 w-3" /> Job Title
-            </label>
-            <Select value={titleCategory} onValueChange={setTitleCategory}>
-              <SelectTrigger className="w-full h-9 bg-background text-xs">
-                <SelectValue placeholder="All Titles" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Job Titles</SelectItem>
-                <SelectItem value="all_qa">All QA, SDET & Test Roles (Recommended)</SelectItem>
-                <SelectItem value="sdet_qa">SDET & Automation QA</SelectItem>
-                <SelectItem value="manual_qa">QA Engineer & Quality Analyst</SelectItem>
-                <SelectItem value="lead_manager">QA Lead & QA/Test Manager</SelectItem>
-                <SelectItem value="performance_security">Performance & Security QA</SelectItem>
-                <SelectItem value="swe_backend">Software Engineer (Backend / SDE)</SelectItem>
-                <SelectItem value="frontend_fullstack">Frontend & Full Stack</SelectItem>
-                <SelectItem value="devops_cloud">DevOps & Cloud SRE</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 2. Location Filter */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-              <MapPin className="h-3 w-3" /> Location
-            </label>
-            <Select value={locPreset} onValueChange={setLocPreset}>
-              <SelectTrigger className="w-full h-9 bg-background text-xs">
-                <SelectValue placeholder="All Locations" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Locations</SelectItem>
-                <SelectItem value="bengaluru">Bengaluru / Bangalore</SelectItem>
-                <SelectItem value="hyderabad">Hyderabad</SelectItem>
-                <SelectItem value="pune">Pune</SelectItem>
-                <SelectItem value="mumbai">Mumbai</SelectItem>
-                <SelectItem value="delhi">Delhi NCR / Gurgaon / Noida</SelectItem>
-                <SelectItem value="chennai">Chennai</SelectItem>
-                <SelectItem value="remote">Remote Only</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 3. Industry Filter */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-              <Building2 className="h-3 w-3" /> Industry
-            </label>
-            <Select value={industry} onValueChange={(val) => setIndustry(val as Industry)}>
-              <SelectTrigger className="w-full h-9 bg-background text-xs">
-                <SelectValue placeholder="All Industries" />
-              </SelectTrigger>
-              <SelectContent>
-                {ALL_INDUSTRIES.map((ind) => (
-                  <SelectItem key={ind} value={ind}>
-                    {ind === "All" ? "All Industries" : ind}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 4. ATS Match Score Tier */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-              <Sparkles className="h-3 w-3" /> ATS Match Score
-            </label>
-            <Select value={scoreTier} onValueChange={setScoreTier}>
-              <SelectTrigger className="w-full h-9 bg-background text-xs">
-                <SelectValue placeholder="All Scores" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Match Scores</SelectItem>
-                <SelectItem value="90plus">90%+ Top-Tier (ATS Pass)</SelectItem>
-                <SelectItem value="80plus">80%+ Strong Fit</SelectItem>
-                <SelectItem value="60plus">60%+ Moderate Fit</SelectItem>
-                <SelectItem value="under60">&lt; 60% Needs Tailoring</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 5. Sort By */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-              <ArrowUpDown className="h-3 w-3" /> Sort By
-            </label>
-            <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-full h-9 bg-background text-xs">
-                <SelectValue placeholder="Sort by" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="score_desc">Highest Match Score</SelectItem>
-                <SelectItem value="score_asc">Lowest Match Score</SelectItem>
-                <SelectItem value="newest">Newest Roles First</SelectItem>
-                <SelectItem value="oldest">Oldest Roles First</SelectItem>
-                <SelectItem value="company_asc">Company Name (A–Z)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {/* Row 3: Active Filters & Summary Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t text-xs">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold text-foreground">
-              Showing {list.length} of {tab === "open" ? counts.open : counts.applied} roles
-            </span>
-
-            {titleCategory !== "all" && (
-              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Title:{" "}
-                {titleCategory === "all_qa"
-                  ? "All QA & SDET"
-                  : titleCategory === "sdet_qa"
-                    ? "SDET & Automation"
-                    : titleCategory === "manual_qa"
-                      ? "QA & Quality Analyst"
-                      : titleCategory === "lead_manager"
-                        ? "QA Lead & Manager"
-                        : titleCategory.replace(/_/g, " ")}
-                <X className="h-3 w-3 cursor-pointer" onClick={() => setTitleCategory("all")} />
-              </Badge>
-            )}
-
-            {locPreset !== "all" && (
-              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Location:{" "}
-                {locPreset === "bengaluru"
-                  ? "Bengaluru / Bangalore"
-                  : locPreset === "delhi"
-                    ? "Delhi NCR / Gurgaon"
-                    : locPreset.charAt(0).toUpperCase() + locPreset.slice(1)}
-                <X className="h-3 w-3 cursor-pointer" onClick={() => setLocPreset("all")} />
-              </Badge>
-            )}
-
-            {industry !== "All" && (
-              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Industry: {industry}
-                <X className="h-3 w-3 cursor-pointer" onClick={() => setIndustry("All")} />
-              </Badge>
-            )}
-
-            {scoreTier !== "all" && (
-              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Score:{" "}
-                {scoreTier === "90plus"
-                  ? "90%+"
-                  : scoreTier === "80plus"
-                    ? "80%+"
-                    : scoreTier === "60plus"
-                      ? "60%+"
-                      : "<60%"}
-                <X className="h-3 w-3 cursor-pointer" onClick={() => setScoreTier("all")} />
-              </Badge>
-            )}
-
-            {remoteOnly && (
-              <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                Remote only
-                <X className="h-3 w-3 cursor-pointer" onClick={() => setRemoteOnly(false)} />
-              </Badge>
-            )}
-          </div>
-
-          {hasActiveFilters && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={clearAllFilters}
-              className="h-7 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <RotateCcw className="h-3 w-3 mr-1" /> Reset all filters
-            </Button>
-          )}
-        </div>
+        {tab === "open" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setTab("linkedin")}
+            className="text-xs text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 font-medium"
+          >
+            <Sparkles className="h-3.5 w-3.5 mr-1" /> Match with your LinkedIn Profile →
+          </Button>
+        )}
       </div>
 
-      {jobs.isLoading ? (
-        <p className="mt-10 text-muted-foreground">Loading…</p>
-      ) : list.length === 0 ? (
-        <div className="mt-10 rounded-xl border border-dashed bg-card p-10 text-center">
-          <p className="font-semibold">No roles here yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Add companies on the{" "}
-            <Link to="/companies" className="text-primary underline">
-              Companies
-            </Link>{" "}
-            page, then press Scan now.
-          </p>
+      {tab === "linkedin" ? (
+        <div className="mt-4">
+          <LinkedInProfileMatcher
+            trackedJobs={jobs.data ?? []}
+            userResumeText={settingsQuery.data?.resume_text || ""}
+            userRoleKeywords={settingsQuery.data?.role_keywords || []}
+            onTailorJob={(j) => setTailorTarget(j)}
+          />
         </div>
       ) : (
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {list.map((j) => (
-            <div
-              key={j.id}
-              onClick={() => setSelected(j)}
-              className={`group flex flex-col justify-between rounded-xl border bg-card p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift cursor-pointer ${
-                j.closed_at ? "opacity-70" : ""
-              }`}
-            >
-              <div>
-                <div className="flex items-start gap-3">
-                  {j.status === "applied" ? (
-                    <div className="flex h-[52px] w-[52px] shrink-0 flex-col items-center justify-center rounded-full bg-success/15 text-success">
-                      <span className="font-mono text-base font-semibold leading-none">
-                        {daysSince(j.last_seen_at || j.first_seen_at)}
-                      </span>
-                      <span className="text-[10px]">days</span>
-                    </div>
-                  ) : (
-                    <ScoreRing score={j.score} size={52} />
+        <>
+          {/* Comprehensive Filtering Dashboard System */}
+          <div className="mt-4 space-y-3 rounded-xl border bg-card p-4 shadow-xs">
+            {/* Row 1: Search + Remote Toggle */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-1 items-center gap-2 min-w-[240px] max-w-md">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search keywords, skills, roles..."
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    className="pl-8 bg-background"
+                  />
+                  {q && (
+                    <button
+                      onClick={() => setQ("")}
+                      className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
                   )}
-                  <div className="min-w-0 flex-1">
-                    <div className="font-semibold text-foreground line-clamp-1 group-hover:text-primary transition-colors">
-                      {j.title}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                      <span className="text-sm font-semibold text-foreground/80 truncate">
-                        {j.companies?.name}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground/60">•</span>
-                      <Badge
-                        variant="secondary"
-                        className="text-[10px] py-0 px-1.5 font-normal bg-muted text-muted-foreground truncate"
-                      >
-                        {getCompanyIndustry(j.companies?.name, j.companies?.category)}
-                      </Badge>
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      {j.status === "applied" ? (
-                        <Badge className="bg-success/15 text-success hover:bg-success/15 text-[10px]">
-                          Applied
-                        </Badge>
-                      ) : j.score != null ? (
-                        <Badge
-                          variant={
-                            j.score >= 80 ? "default" : j.score >= 60 ? "secondary" : "outline"
-                          }
-                          className={
-                            j.score >= 80
-                              ? "bg-success/15 text-success hover:bg-success/15 border-0 text-[10px]"
-                              : j.score < 60
-                                ? "text-amber-600 border-amber-500/30 text-[10px]"
-                                : "text-[10px]"
-                          }
-                        >
-                          {j.score >= 80
-                            ? "Strong Fit"
-                            : j.score >= 60
-                              ? "Moderate"
-                              : "Needs Tailoring"}
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Not scored
-                        </Badge>
-                      )}
-                      {isRemote(j) && (
-                        <Badge variant="outline" className="text-[10px]">
-                          Remote
-                        </Badge>
-                      )}
-                      {j.location && (
-                        <span className="truncate text-xs text-muted-foreground">{j.location}</span>
-                      )}
-                    </div>
-                  </div>
                 </div>
-
-                {/* Missing Skills / Keywords on the card */}
-                {j.missing_skills && j.missing_skills.length > 0 && j.status !== "applied" && (
-                  <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-2">
-                    <div className="flex items-center gap-1 text-[11px] font-semibold text-destructive uppercase tracking-wide">
-                      <AlertCircle className="h-3 w-3 shrink-0" />
-                      <span>Missing keywords:</span>
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {j.missing_skills.slice(0, 3).map((s) => (
-                        <span
-                          key={s}
-                          className="inline-flex items-center rounded border border-destructive/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-destructive"
-                        >
-                          + {s}
-                        </span>
-                      ))}
-                      {j.missing_skills.length > 3 && (
-                        <span className="self-center text-[10px] font-medium text-destructive">
-                          +{j.missing_skills.length - 3} more
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* If no missing skills and matched skills present */}
-                {(!j.missing_skills || j.missing_skills.length === 0) &&
-                  j.matched_skills &&
-                  j.matched_skills.length > 0 &&
-                  j.status !== "applied" && (
-                    <div className="mt-3 rounded-lg border border-success/20 bg-success/5 p-2">
-                      <div className="flex items-center gap-1 text-[11px] font-semibold text-success uppercase tracking-wide">
-                        <CheckCircle2 className="h-3 w-3 shrink-0" />
-                        <span>Matched keywords:</span>
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {j.matched_skills.slice(0, 3).map((s) => (
-                          <span
-                            key={s}
-                            className="inline-flex items-center rounded border border-success/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-success"
-                          >
-                            ✓ {s}
-                          </span>
-                        ))}
-                        {j.matched_skills.length > 3 && (
-                          <span className="self-center text-[10px] font-medium text-success">
-                            +{j.matched_skills.length - 3} more
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-              </div>
-
-              {/* Action buttons directly on the card */}
-              <div className="mt-3.5 pt-3 border-t flex items-center justify-between gap-2">
-                <a
-                  href={getExactJobPostingUrl(j)}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline hover:text-primary/80"
-                  title="Open company career home page where this role was found"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  <span>View posting</span>
-                </a>
-
                 <Button
+                  variant={remoteOnly ? "ink" : "outline"}
                   size="sm"
-                  variant="outline"
-                  className="h-7 text-xs px-2.5 font-medium border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setTailorTarget(j);
-                  }}
-                  title="Rebuild resume for 95%+ match against this role"
+                  onClick={() => setRemoteOnly((v) => !v)}
+                  className="shrink-0"
                 >
-                  <Sparkles className="h-3 w-3 mr-1 text-purple-600" />
-                  <span>Rebuild (95%+)</span>
+                  {remoteOnly ? "✓ " : ""}Remote only
                 </Button>
               </div>
             </div>
-          ))}
-        </div>
+
+            {/* Row 2: Category, Location, Industry, ATS Score, Sort */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
+              {/* 1. Job Title Filter */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <Briefcase className="h-3 w-3" /> Job Title
+                </label>
+                <Select value={titleCategory} onValueChange={setTitleCategory}>
+                  <SelectTrigger className="w-full h-9 bg-background text-xs">
+                    <SelectValue placeholder="All Titles" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Job Titles</SelectItem>
+                    <SelectItem value="all_qa">All QA, SDET & Test Roles (Recommended)</SelectItem>
+                    <SelectItem value="sdet_qa">SDET & Automation QA</SelectItem>
+                    <SelectItem value="manual_qa">QA Engineer & Quality Analyst</SelectItem>
+                    <SelectItem value="lead_manager">QA Lead & QA/Test Manager</SelectItem>
+                    <SelectItem value="performance_security">Performance & Security QA</SelectItem>
+                    <SelectItem value="swe_backend">Software Engineer (Backend / SDE)</SelectItem>
+                    <SelectItem value="frontend_fullstack">Frontend & Full Stack</SelectItem>
+                    <SelectItem value="devops_cloud">DevOps & Cloud SRE</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* 2. Location Filter */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <MapPin className="h-3 w-3" /> Location
+                </label>
+                <Select value={locPreset} onValueChange={setLocPreset}>
+                  <SelectTrigger className="w-full h-9 bg-background text-xs">
+                    <SelectValue placeholder="All Locations" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Locations</SelectItem>
+                    <SelectItem value="bengaluru">Bengaluru / Bangalore</SelectItem>
+                    <SelectItem value="hyderabad">Hyderabad</SelectItem>
+                    <SelectItem value="pune">Pune</SelectItem>
+                    <SelectItem value="mumbai">Mumbai</SelectItem>
+                    <SelectItem value="delhi">Delhi NCR / Gurgaon / Noida</SelectItem>
+                    <SelectItem value="chennai">Chennai</SelectItem>
+                    <SelectItem value="remote">Remote Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* 3. Industry Filter */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <Building2 className="h-3 w-3" /> Industry
+                </label>
+                <Select value={industry} onValueChange={(val) => setIndustry(val as Industry)}>
+                  <SelectTrigger className="w-full h-9 bg-background text-xs">
+                    <SelectValue placeholder="All Industries" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ALL_INDUSTRIES.map((ind) => (
+                      <SelectItem key={ind} value={ind}>
+                        {ind === "All" ? "All Industries" : ind}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* 4. ATS Match Score Tier */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <Sparkles className="h-3 w-3" /> ATS Match Score
+                </label>
+                <Select value={scoreTier} onValueChange={setScoreTier}>
+                  <SelectTrigger className="w-full h-9 bg-background text-xs">
+                    <SelectValue placeholder="All Scores" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Match Scores</SelectItem>
+                    <SelectItem value="90plus">90%+ Top-Tier (ATS Pass)</SelectItem>
+                    <SelectItem value="80plus">80%+ Strong Fit</SelectItem>
+                    <SelectItem value="60plus">60%+ Moderate Fit</SelectItem>
+                    <SelectItem value="under60">&lt; 60% Needs Tailoring</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* 5. Sort By */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <ArrowUpDown className="h-3 w-3" /> Sort By
+                </label>
+                <Select value={sortBy} onValueChange={setSortBy}>
+                  <SelectTrigger className="w-full h-9 bg-background text-xs">
+                    <SelectValue placeholder="Sort by" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="score_desc">Highest Match Score</SelectItem>
+                    <SelectItem value="score_asc">Lowest Match Score</SelectItem>
+                    <SelectItem value="newest">Newest Roles First</SelectItem>
+                    <SelectItem value="oldest">Oldest Roles First</SelectItem>
+                    <SelectItem value="company_asc">Company Name (A–Z)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Row 3: Active Filters & Summary Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t text-xs">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-semibold text-foreground">
+                  Showing {list.length} of {tab === "open" ? counts.open : counts.applied} roles
+                </span>
+
+                {titleCategory !== "all" && (
+                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                    Title:{" "}
+                    {titleCategory === "all_qa"
+                      ? "All QA & SDET"
+                      : titleCategory === "sdet_qa"
+                        ? "SDET & Automation"
+                        : titleCategory === "manual_qa"
+                          ? "QA & Quality Analyst"
+                          : titleCategory === "lead_manager"
+                            ? "QA Lead & Manager"
+                            : titleCategory.replace(/_/g, " ")}
+                    <X className="h-3 w-3 cursor-pointer" onClick={() => setTitleCategory("all")} />
+                  </Badge>
+                )}
+
+                {locPreset !== "all" && (
+                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                    Location:{" "}
+                    {locPreset === "bengaluru"
+                      ? "Bengaluru / Bangalore"
+                      : locPreset === "delhi"
+                        ? "Delhi NCR / Gurgaon"
+                        : locPreset.charAt(0).toUpperCase() + locPreset.slice(1)}
+                    <X className="h-3 w-3 cursor-pointer" onClick={() => setLocPreset("all")} />
+                  </Badge>
+                )}
+
+                {industry !== "All" && (
+                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                    Industry: {industry}
+                    <X className="h-3 w-3 cursor-pointer" onClick={() => setIndustry("All")} />
+                  </Badge>
+                )}
+
+                {scoreTier !== "all" && (
+                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                    Score:{" "}
+                    {scoreTier === "90plus"
+                      ? "90%+"
+                      : scoreTier === "80plus"
+                        ? "80%+"
+                        : scoreTier === "60plus"
+                          ? "60%+"
+                          : "<60%"}
+                    <X className="h-3 w-3 cursor-pointer" onClick={() => setScoreTier("all")} />
+                  </Badge>
+                )}
+
+                {remoteOnly && (
+                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                    Remote only
+                    <X className="h-3 w-3 cursor-pointer" onClick={() => setRemoteOnly(false)} />
+                  </Badge>
+                )}
+              </div>
+
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearAllFilters}
+                  className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" /> Reset all filters
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {jobs.isLoading ? (
+            <p className="mt-10 text-muted-foreground">Loading…</p>
+          ) : list.length === 0 ? (
+            <div className="mt-10 rounded-xl border border-dashed bg-card p-10 text-center">
+              <p className="font-semibold">No roles here yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Add companies on the{" "}
+                <Link to="/companies" className="text-primary underline">
+                  Companies
+                </Link>{" "}
+                page, then press Scan now.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {list.map((j) => (
+                <div
+                  key={j.id}
+                  onClick={() => setSelected(j)}
+                  className={`group flex flex-col justify-between rounded-xl border bg-card p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift cursor-pointer ${
+                    j.closed_at ? "opacity-70" : ""
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start gap-3">
+                      {j.status === "applied" ? (
+                        <div className="flex h-[52px] w-[52px] shrink-0 flex-col items-center justify-center rounded-full bg-success/15 text-success">
+                          <span className="font-mono text-base font-semibold leading-none">
+                            {daysSince(j.last_seen_at || j.first_seen_at)}
+                          </span>
+                          <span className="text-[10px]">days</span>
+                        </div>
+                      ) : (
+                        <ScoreRing score={j.score} size={52} />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-foreground line-clamp-1 group-hover:text-primary transition-colors">
+                          {j.title}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                          <span className="text-sm font-semibold text-foreground/80 truncate">
+                            {j.companies?.name}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground/60">•</span>
+                          <Badge
+                            variant="secondary"
+                            className="text-[10px] py-0 px-1.5 font-normal bg-muted text-muted-foreground truncate"
+                          >
+                            {getCompanyIndustry(j.companies?.name, j.companies?.category)}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {j.status === "applied" ? (
+                            <Badge className="bg-success/15 text-success hover:bg-success/15 text-[10px]">
+                              Applied
+                            </Badge>
+                          ) : j.score != null ? (
+                            <Badge
+                              variant={
+                                j.score >= 80 ? "default" : j.score >= 60 ? "secondary" : "outline"
+                              }
+                              className={
+                                j.score >= 80
+                                  ? "bg-success/15 text-success hover:bg-success/15 border-0 text-[10px]"
+                                  : j.score < 60
+                                    ? "text-amber-600 border-amber-500/30 text-[10px]"
+                                    : "text-[10px]"
+                              }
+                            >
+                              {j.score >= 80
+                                ? "Strong Fit"
+                                : j.score >= 60
+                                  ? "Moderate"
+                                  : "Needs Tailoring"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px]">
+                              Not scored
+                            </Badge>
+                          )}
+                          {isRemote(j) && (
+                            <Badge variant="outline" className="text-[10px]">
+                              Remote
+                            </Badge>
+                          )}
+                          {j.location && (
+                            <span className="truncate text-xs text-muted-foreground">
+                              {j.location}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Missing Skills / Keywords on the card */}
+                    {j.missing_skills && j.missing_skills.length > 0 && j.status !== "applied" && (
+                      <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-2">
+                        <div className="flex items-center gap-1 text-[11px] font-semibold text-destructive uppercase tracking-wide">
+                          <AlertCircle className="h-3 w-3 shrink-0" />
+                          <span>Missing keywords:</span>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {j.missing_skills.slice(0, 3).map((s) => (
+                            <span
+                              key={s}
+                              className="inline-flex items-center rounded border border-destructive/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-destructive"
+                            >
+                              + {s}
+                            </span>
+                          ))}
+                          {j.missing_skills.length > 3 && (
+                            <span className="self-center text-[10px] font-medium text-destructive">
+                              +{j.missing_skills.length - 3} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* If no missing skills and matched skills present */}
+                    {(!j.missing_skills || j.missing_skills.length === 0) &&
+                      j.matched_skills &&
+                      j.matched_skills.length > 0 &&
+                      j.status !== "applied" && (
+                        <div className="mt-3 rounded-lg border border-success/20 bg-success/5 p-2">
+                          <div className="flex items-center gap-1 text-[11px] font-semibold text-success uppercase tracking-wide">
+                            <CheckCircle2 className="h-3 w-3 shrink-0" />
+                            <span>Matched keywords:</span>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {j.matched_skills.slice(0, 3).map((s) => (
+                              <span
+                                key={s}
+                                className="inline-flex items-center rounded border border-success/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-success"
+                              >
+                                ✓ {s}
+                              </span>
+                            ))}
+                            {j.matched_skills.length > 3 && (
+                              <span className="self-center text-[10px] font-medium text-success">
+                                +{j.matched_skills.length - 3} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                  </div>
+
+                  {/* Action buttons directly on the card */}
+                  <div className="mt-3.5 pt-3 border-t flex items-center justify-between gap-2">
+                    <a
+                      href={getExactJobPostingUrl(j)}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline hover:text-primary/80"
+                      title="Open company career home page where this role was found"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span>View posting</span>
+                    </a>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2.5 font-medium border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTailorTarget(j);
+                      }}
+                      title="Rebuild resume for 95%+ match against this role"
+                    >
+                      <Sparkles className="h-3 w-3 mr-1 text-purple-600" />
+                      <span>Rebuild (95%+)</span>
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       <JobSheet

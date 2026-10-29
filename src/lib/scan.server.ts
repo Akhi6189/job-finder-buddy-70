@@ -4,6 +4,7 @@ import { GoogleGenAI } from "@google/genai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { computeATSScore, DEFAULT_SDET_RESUME } from "./ats-score";
+import { isGenericSearchUrl } from "./validate-career-url.server";
 
 // Force IPv4 first to prevent hanging on IPv6 in container environment
 try {
@@ -92,7 +93,7 @@ const KNOWN_COMPANY_PORTALS: Record<string, string> = {
 
 /**
  * Uses verified directory or Gemini AI to locate genuine official careers portals.
- * Never throws, always returns a clean URL.
+ * Never throws, always returns a clean direct URL or empty string. Never returns search queries.
  */
 export async function findCareersUrl(name: string, hint?: string): Promise<string> {
   const norm = name.trim().toLowerCase();
@@ -111,11 +112,13 @@ export async function findCareersUrl(name: string, hint?: string): Promise<strin
   const models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
   const prompt = `You are a talent research specialist.
 Find the exact official careers portal or ATS job board URL for company: "${name}"${hint ? ` (Hint: ${hint})` : ""}.
-Do NOT just append /careers or /carrer to their homepage unless that is genuinely their active job board. If they use an ATS like Greenhouse, Lever, Ashby, or Workday, return that exact ATS URL.
+CRITICAL: Do NOT return a Google search link (e.g. google.com/search). Do NOT return job aggregators like indeed or glassdoor.
+If they use an ATS like Greenhouse, Lever, Ashby, or Workday, return that exact ATS URL.
+If not found with certainty, return null.
 
 Return ONLY a valid JSON object:
 {
-  "careers_url": "https://..."
+  "careers_url": "https://..." or null
 }`;
 
   for (const model of models) {
@@ -132,7 +135,11 @@ Return ONLY a valid JSON object:
           clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
         }
         const parsed = JSON.parse(clean);
-        if (parsed.careers_url && /^https?:\/\//i.test(parsed.careers_url)) {
+        if (
+          parsed.careers_url &&
+          /^https?:\/\//i.test(parsed.careers_url) &&
+          !isGenericSearchUrl(parsed.careers_url)
+        ) {
           return parsed.careers_url.trim();
         }
       }
@@ -141,11 +148,12 @@ Return ONLY a valid JSON object:
     }
   }
 
-  if (hint && /^https?:\/\//i.test(hint) && !hint.includes("google.com")) {
+  if (hint && /^https?:\/\//i.test(hint) && !isGenericSearchUrl(hint)) {
     return hint;
   }
 
-  return `https://www.google.com/search?q=${encodeURIComponent(name + " careers jobs")}`;
+  // Never return a Google search URL as a career portal
+  return "";
 }
 
 /** Expands keywords like "SDET" to cover related job titles */
@@ -631,16 +639,55 @@ export function parseJobsFromHtml(
       }
     }
 
-    const normKey = `${cleanTitle.toLowerCase()}::${(job.location || "").toLowerCase().slice(0, 30)}`;
-    if (!jobsMap.has(normKey)) {
-      jobsMap.set(normKey, {
-        title: cleanTitle,
-        url: finalUrl,
-        location: (job.location || "").trim(),
-        experience: (job.experience || "").trim(),
-        description: cleanHtmlText(job.description),
-      });
+    const cleanLocation = (job.location || "").trim();
+    const cleanExperience = (job.experience || "").trim();
+    const cleanDesc = cleanHtmlText(job.description);
+
+    // Look for existing entry to enrich or deduplicate
+    for (const [, existing] of jobsMap.entries()) {
+      const sameUrl = Boolean(existing.url && finalUrl && existing.url === finalUrl);
+      const sameTitle = existing.title.toLowerCase() === cleanTitle.toLowerCase();
+
+      // If it's the exact same URL, or same title with compatible locations
+      if (
+        sameUrl ||
+        (sameTitle &&
+          (!existing.location ||
+            !cleanLocation ||
+            existing.location.toLowerCase() === cleanLocation.toLowerCase() ||
+            /^(remote|hybrid|onsite|on-site)$/i.test(existing.location)))
+      ) {
+        if (
+          (!existing.location || /^(remote|hybrid|onsite|on-site)$/i.test(existing.location)) &&
+          cleanLocation
+        ) {
+          existing.location = cleanLocation;
+        }
+        if ((!existing.experience || existing.experience === "Technology") && cleanExperience) {
+          existing.experience = cleanExperience;
+        }
+        if ((!existing.description || existing.description.length < 50) && cleanDesc) {
+          existing.description = cleanDesc;
+        }
+        if (
+          (!existing.url || existing.url.includes("google.com/search")) &&
+          finalUrl &&
+          !finalUrl.includes("google.com/search")
+        ) {
+          existing.url = finalUrl;
+        }
+        return;
+      }
     }
+
+    const normKey = `${cleanTitle.toLowerCase()}::${cleanLocation.toLowerCase().slice(0, 30)}::${finalUrl}`;
+    jobsMap.set(normKey, {
+      title: cleanTitle,
+      url: finalUrl,
+      location: cleanLocation,
+      experience: cleanExperience,
+      description: cleanDesc,
+    });
   }
 
   // 1. Schema.org JSON-LD Extraction (Handles top-level, @graph, and itemListElement)
@@ -763,6 +810,157 @@ export function parseJobsFromHtml(
     // Remove noisy elements that interfere with text extraction
     $("script, style, noscript, svg, nav, footer, header").remove();
 
+    // Helper: Extract location from element, table cells, or parent container
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function extractLocation($el: cheerio.Cheerio<any>): string {
+      const primaryLocSelector =
+        '[class*="location"], [class*="loc"], [class*="city"], [class*="office"], [class*="region"], [class*="country"], [class*="geo"], [data-location], [data-city], [data-office]';
+
+      let foundLoc = "";
+      let foundModality = "";
+
+      $el.find(primaryLocSelector).each((_, el) => {
+        const txt = $(el).text().trim();
+        if (!txt || /apply|view details|learn more/i.test(txt) || txt.length > 120) return;
+        if (/^(remote|hybrid|onsite|on-site)$/i.test(txt)) {
+          if (!foundModality) foundModality = txt;
+          return;
+        }
+        foundLoc = txt;
+        return false;
+      });
+
+      if (foundLoc) return foundLoc;
+
+      // Check table cells if inside a table row or containing cells
+      const isTr = $el.is("tr");
+      const tds = isTr ? $el.find("td") : $el.find("tr td");
+      if (tds.length > 0) {
+        const $table = $el.closest("table");
+        if ($table.length) {
+          let locIdx = -1;
+          $table.find("thead th, tr th").each((idx, th) => {
+            if (/loc|city|office|region|country/i.test($(th).text())) {
+              locIdx = idx;
+              return false;
+            }
+          });
+          if (locIdx >= 0) {
+            const td = tds.eq(locIdx);
+            if (td.length) {
+              const txt = td.text().trim();
+              if (txt && !/apply/i.test(txt)) {
+                if (/^(remote|hybrid|onsite|on-site)$/i.test(txt)) {
+                  if (!foundModality) foundModality = txt;
+                } else {
+                  return txt;
+                }
+              }
+            }
+          }
+        }
+
+        let cellLoc = "";
+        tds.each((_, td) => {
+          const $td = $(td);
+          const cls = ($td.attr("class") || "").toLowerCase();
+          const txt = $td.text().trim();
+          if (/loc|city|office|region|country/i.test(cls) && txt && !/apply/i.test(txt)) {
+            if (/^(remote|hybrid|onsite|on-site)$/i.test(txt)) {
+              if (!foundModality) foundModality = txt;
+              return;
+            }
+            cellLoc = txt;
+            return false;
+          }
+          if (
+            !cellLoc &&
+            txt &&
+            txt.length < 80 &&
+            /,|remote|hybrid|onsite|on-site|india|usa|us|united states|uk|spain|germany|singapore|canada|london|bangalore|bengaluru/i.test(
+              txt,
+            ) &&
+            !$td.find("a").length
+          ) {
+            if (/^(remote|hybrid|onsite|on-site)$/i.test(txt)) {
+              if (!foundModality) foundModality = txt;
+            } else {
+              cellLoc = txt;
+            }
+          }
+        });
+        if (cellLoc) return cellLoc;
+      }
+
+      // Check closest parent container for real location tag first
+      const parentContainer = $el.closest(
+        'tr, li, [class*="job-card"], [class*="job-item"], [class*="job_item"], [class*="job-row"], [class*="job"], [class*="opening"], [class*="card"], [class*="item"]',
+      );
+      if (parentContainer.length && parentContainer[0] !== $el[0]) {
+        const parentLoc = extractLocation(parentContainer);
+        if (parentLoc) return parentLoc;
+      }
+
+      // Secondary fallback: workplace badge (e.g. Remote / Hybrid)
+      if (foundModality) return foundModality;
+      const workplaceEl = $el.find('[class*="workplace"], [data-workplace]').first();
+      if (workplaceEl.length) {
+        const txt = workplaceEl.text().trim();
+        if (txt && !/apply/i.test(txt) && txt.length < 120) {
+          return txt;
+        }
+      }
+
+      return "";
+    }
+
+    // Helper: Extract department from element or table cells
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function extractDepartment($el: cheerio.Cheerio<any>, fallbackDept: string): string {
+      const deptSelector =
+        '[class*="department"], [class*="dept"], [class*="team"], [class*="category"], [class*="group"], [data-department]';
+      const directEl = $el.find(deptSelector).first();
+      if (directEl.length) {
+        const txt = directEl.text().trim();
+        if (txt && txt.length < 100) return txt;
+      }
+
+      const isTr = $el.is("tr");
+      const tds = isTr ? $el.find("td") : $el.find("tr td");
+      if (tds.length > 0) {
+        const $table = $el.closest("table");
+        if ($table.length) {
+          let deptIdx = -1;
+          $table.find("thead th, tr th").each((idx, th) => {
+            if (/dept|team|category|function|business/i.test($(th).text())) {
+              deptIdx = idx;
+              return false;
+            }
+          });
+          if (deptIdx >= 0) {
+            const td = tds.eq(deptIdx);
+            if (td.length) {
+              const txt = td.text().trim();
+              if (txt && !/apply/i.test(txt)) return txt;
+            }
+          }
+        }
+
+        let cellDept = "";
+        tds.each((_, td) => {
+          const $td = $(td);
+          const cls = ($td.attr("class") || "").toLowerCase();
+          if (/dept|team|category|function/i.test(cls)) {
+            cellDept = $td.text().trim();
+            return false;
+          }
+        });
+        if (cellDept) return cellDept;
+      }
+
+      return fallbackDept;
+    }
+
     // Strategy A: Nested Department / Team Accordions
     const deptContainers = $(
       'section, div[class*="department"], div[class*="team"], div[class*="category"], div[class*="group"], [data-department]',
@@ -775,30 +973,39 @@ export function parseJobsFromHtml(
         .text()
         .trim();
 
-      const nestedItems = $dept.find(
-        'li, tr, [class*="job"], [class*="opening"], [class*="card"], [class*="role"], [class*="position"], a[href]',
+      let nestedItems = $dept.find(
+        'li, tr, [class*="job-card"], [class*="job-item"], [class*="job_item"], [class*="job-row"], [class*="job-listing"], [class*="job-opening"], [class*="career-card"], [class*="career-item"], [class*="opening-card"], [class*="position-card"]',
       );
+      if (nestedItems.length === 0) {
+        nestedItems = $dept.find(
+          'li, tr, [class*="job"], [class*="opening"], [class*="card"], [class*="role"], [class*="position"]',
+        );
+      }
+      if (nestedItems.length === 0) {
+        nestedItems = $dept.find("a[href]");
+      }
+
       nestedItems.each((_, itemEl) => {
         const $item = $(itemEl);
-        const $link = $item.is("a") ? $item : $item.find("a").first();
+        const $link = $item.is("a")
+          ? $item
+          : $item.find("a[href]").not('[class*="apply"], [href*="apply"]').first();
+        const effectiveLink = $link.length ? $link : $item.find("a[href]").first();
         const titleEl = $item
-          .find('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="name"]')
+          .find('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="role"], [class*="name"]')
           .first();
-        const rawTitle = titleEl.length ? titleEl.text().trim() : $link.text().trim();
+        const rawTitle = titleEl.length ? titleEl.text().trim() : effectiveLink.text().trim();
 
         if (isValidJobTitle(rawTitle)) {
-          const href = $link.attr("href") || "";
-          const loc = $item
-            .find('[class*="location"], [class*="city"], [class*="geo"]')
-            .first()
-            .text()
-            .trim();
+          const href = effectiveLink.attr("href") || "";
+          const loc = extractLocation($item);
+          const dept = extractDepartment($item, deptName);
           addJob({
             title: rawTitle,
             url: href,
             location: loc,
-            experience: deptName,
-            description: `${rawTitle}${deptName ? ` in ${deptName}` : ""}${loc ? ` - ${loc}` : ""}`,
+            experience: dept,
+            description: `${rawTitle}${dept ? ` in ${dept}` : ""}${loc ? ` - ${loc}` : ""}`,
           });
         }
       });
@@ -836,26 +1043,21 @@ export function parseJobsFromHtml(
 
     $(cardSelectors.join(", ")).each((_, el) => {
       const $card = $(el);
-      const $link = $card.is("a") ? $card : $card.find("a[href]").first();
+      const $link = $card.is("a")
+        ? $card
+        : $card.find("a[href]").not('[class*="apply"], [href*="apply"]').first();
+      const effectiveLink = $link.length ? $link : $card.find("a[href]").first();
       const titleEl = $card
         .find(
           'h1, h2, h3, h4, h5, h6, [class*="title"], [class*="role"], [class*="name"], [class*="position"]',
         )
         .first();
-      const rawTitle = titleEl.length ? titleEl.text().trim() : $link.text().trim();
+      const rawTitle = titleEl.length ? titleEl.text().trim() : effectiveLink.text().trim();
 
       if (isValidJobTitle(rawTitle)) {
-        const href = $link.attr("href") || "";
-        const loc = $card
-          .find('[class*="location"], [class*="city"], [class*="place"], [class*="geo"]')
-          .first()
-          .text()
-          .trim();
-        const dept = $card
-          .find('[class*="department"], [class*="team"], [class*="category"]')
-          .first()
-          .text()
-          .trim();
+        const href = effectiveLink.attr("href") || "";
+        const loc = extractLocation($card);
+        const dept = extractDepartment($card, "");
         const snippet = $card.text().slice(0, 300);
 
         addJob({
@@ -1047,7 +1249,10 @@ function computeJobRelevance(job: ExtractedJob, keywords: string[], expanded: st
 
   // 2. Specialized QA / SDET title detection (Guarantees QA roles always surface first)
   const isQaTitle =
-    /\b(qa\b|sdet|tester|testing|test engineer|test lead|lead qa|qa lead|qa manager|quality assurance|quality engineer|quality analyst|automation engineer|automation tester|test automation|qc\b|qe\b|software development engineer in test|software engineer in test)\b/i.test(
+    /\b(qa\b|sdet|test\b|tester|testing|test engineer|test lead|lead qa|qa lead|qa manager|quality assurance|quality engineer|quality analyst|automation engineer|automation tester|test automation|qc\b|qe\b|software development engineer in test|software engineer in test)\b/i.test(
+      title,
+    ) ||
+    /software\s*(?:engineer|developer).*(?:in\s*test|,\s*test|[-–—|/]\s*test|\btest\b)/i.test(
       title,
     );
   if (isQaTitle) {
@@ -1211,28 +1416,44 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
     // Check if URL is suspicious or a naive /careers append or a 404 greenhouse guess
     const normName = company.name.trim().toLowerCase();
     const hasKnownPortal = Boolean(KNOWN_COMPANY_PORTALS[normName]);
+    const isSearchUrl = Boolean(careersUrl && isGenericSearchUrl(careersUrl));
     const isSuspiciousUrl =
       !careersUrl ||
+      isSearchUrl ||
       careersUrl.endsWith("/careers") ||
       careersUrl.endsWith("/career") ||
       careersUrl.endsWith("/carrer") ||
-      careersUrl.includes("google.com/search") ||
       !/^https?:\/\//i.test(careersUrl) ||
       (hasKnownPortal && KNOWN_COMPANY_PORTALS[normName] !== careersUrl);
 
     if (isSuspiciousUrl) {
-      const verifiedUrl = await findCareersUrl(company.name, careersUrl || undefined);
-      if (verifiedUrl) {
-        careersUrl = verifiedUrl;
-        await db.from("companies").update({ careers_url: verifiedUrl }).eq("id", company.id);
+      const { updateCompanyWithCanonicalUrl } = await import("./canonical-career-search.server");
+      const updated = await updateCompanyWithCanonicalUrl(db, company.id, company.name);
+      if (updated.updated && updated.newUrl && !isGenericSearchUrl(updated.newUrl)) {
+        careersUrl = updated.newUrl;
+      } else {
+        const verifiedUrl = await findCareersUrl(company.name, careersUrl || undefined);
+        if (verifiedUrl && !isGenericSearchUrl(verifiedUrl)) {
+          careersUrl = verifiedUrl;
+          await db.from("companies").update({ careers_url: verifiedUrl }).eq("id", company.id);
+        } else if (isSearchUrl) {
+          // Clear corrupted search URL so database stays clean
+          careersUrl = null;
+          await db.from("companies").update({ careers_url: null }).eq("id", company.id);
+        }
       }
     }
 
-    if (!careersUrl) {
-      careersUrl = await findCareersUrl(company.name);
-      if (careersUrl) {
-        await db.from("companies").update({ careers_url: careersUrl }).eq("id", company.id);
-      }
+    if (!careersUrl || isGenericSearchUrl(careersUrl)) {
+      await db
+        .from("tracked_companies")
+        .update({
+          last_checked_at: new Date().toISOString(),
+          last_error:
+            "Missing direct careers portal link. Generic search results cannot be scanned for jobs.",
+        })
+        .eq("id", trackedId);
+      return { added: 0, checked: company.name, status: "needs_direct_careers_url" };
     }
 
     const found = await extractJobs(careersUrl, keywords, company.name);

@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, redirect, useNavigate } from "@tanstack/react-router";
-import { Briefcase, Building2, Settings, LogOut, Radar, FileCheck2 } from "lucide-react";
+import { Briefcase, Building2, Settings, LogOut, Radar, FileCheck2, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -13,11 +13,12 @@ export const Route = createFileRoute("/_authenticated")({
 });
 
 const nav = [
-  { to: "/jobs", label: "Roles", icon: Briefcase },
-  { to: "/applications", label: "Applications", icon: FileCheck2 },
-  { to: "/companies", label: "Companies", icon: Building2 },
-  { to: "/settings", label: "Settings", icon: Settings },
-] as const;
+  { to: "/jobs" as const, search: { tab: "open" }, label: "Roles", icon: Briefcase },
+  { to: "/jobs" as const, search: { tab: "linkedin" }, label: "LinkedIn Match", icon: Sparkles },
+  { to: "/applications" as const, search: undefined, label: "Applications", icon: FileCheck2 },
+  { to: "/companies" as const, search: undefined, label: "Companies", icon: Building2 },
+  { to: "/settings" as const, search: undefined, label: "Settings", icon: Settings },
+];
 
 function Shell() {
   const navigate = useNavigate();
@@ -31,8 +32,9 @@ function Shell() {
           <nav className="hidden gap-1 md:flex">
             {nav.map((n) => (
               <Link
-                key={n.to}
+                key={n.label}
                 to={n.to}
+                search={n.search}
                 className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
                 activeProps={{
                   className:
@@ -58,18 +60,20 @@ function Shell() {
       <main className="mx-auto max-w-6xl px-4 py-6">
         <Outlet />
       </main>
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t bg-card md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t bg-card md:hidden">
         {nav.map((n) => (
           <Link
-            key={n.to}
+            key={n.label}
             to={n.to}
-            className="flex flex-col items-center gap-1 py-2.5 text-xs text-muted-foreground"
+            search={n.search}
+            className="flex flex-col items-center gap-1 py-2 text-[11px] text-muted-foreground"
             activeProps={{
-              className: "flex flex-col items-center gap-1 py-2.5 text-xs text-primary font-medium",
+              className:
+                "flex flex-col items-center gap-1 py-2 text-[11px] text-primary font-medium",
             }}
           >
-            <n.icon className="h-5 w-5" />
-            {n.label}
+            <n.icon className="h-4 w-4" />
+            <span className="truncate max-w-[64px]">{n.label}</span>
           </Link>
         ))}
       </nav>

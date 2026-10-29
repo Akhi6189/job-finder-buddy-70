@@ -254,15 +254,70 @@ export const locateCareersForCompany = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator((d) => z.object({ companyId: z.string().uuid(), companyName: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
-    const url = await findCareersUrl(data.companyName);
-    if (url) {
-      await context.supabase
-        .from("companies")
-        .update({ careers_url: url })
-        .eq("id", data.companyId);
-      return { ok: true as const, url };
+    const { updateCompanyWithCanonicalUrl } = await import("./canonical-career-search.server");
+    const res = await updateCompanyWithCanonicalUrl(
+      context.supabase,
+      data.companyId,
+      data.companyName,
+    );
+    if (res.updated && res.newUrl) {
+      return { ok: true as const, url: res.newUrl, reason: res.reason, source: res.source };
     }
-    return { ok: false as const, error: "Could not locate careers page" };
+    return {
+      ok: false as const,
+      error:
+        "Could not locate a verified direct careers portal via search API. Please enter the direct URL manually.",
+    };
+  });
+
+export const searchAndUpdateCompanyCareerUrlFn = locateCareersForCompany;
+
+export const batchUpdateCompaniesFromSearchApiFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        forceAll: z.boolean().optional(),
+        companyIds: z.array(z.string().uuid()).optional(),
+      })
+      .optional()
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { autoUpdateCompaniesWithGenericUrls } = await import("./canonical-career-search.server");
+    return autoUpdateCompaniesWithGenericUrls(context.supabase, {
+      forceAll: data?.forceAll,
+      companyIds: data?.companyIds,
+    });
+  });
+
+export const validateCompanyCareerUrl = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z.object({ url: z.string().optional(), companyName: z.string().optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const { validateCareerUrl, resolveDirectCareerUrl } =
+      await import("./validate-career-url.server");
+    const result = await validateCareerUrl(data.url, data.companyName);
+    let resolvedUrl: string | null = null;
+    if ((result.isGenericSearch || !result.isValid) && data.companyName) {
+      const res = await resolveDirectCareerUrl(data.companyName, null);
+      if (res.isValid && res.url) {
+        resolvedUrl = res.url;
+      }
+    }
+    return {
+      ...result,
+      resolvedUrl,
+    };
+  });
+
+export const auditAndCleanCompanyUrlsFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { auditAndCleanCompanyUrls } = await import("./validate-career-url.server");
+    return auditAndCleanCompanyUrls(context.supabase);
   });
 
 const rowsSchema = z
@@ -280,6 +335,8 @@ import type { Database } from "@/integrations/supabase/types";
 type DB = SupabaseClient<Database>;
 
 async function importRows(db: DB, userId: string, rows: z.infer<typeof rowsSchema>) {
+  const { validateCareerUrl, resolveDirectCareerUrl } =
+    await import("./validate-career-url.server");
   const { data: all } = await db.from("companies").select("id, name, careers_url");
   const byName = new Map<string, { id: string; careers_url: string | null }>(
     (all ?? []).map((c: { id: string; name: string; careers_url: string | null }) => [
@@ -292,13 +349,26 @@ async function importRows(db: DB, userId: string, rows: z.infer<typeof rowsSchem
 
   for (const r of rows) {
     const key = r.name.toLowerCase();
+    let validCareersUrl: string | null = null;
+
+    if (r.careers_url) {
+      const check = await validateCareerUrl(r.careers_url, r.name);
+      if (check.isValid && !check.isGenericSearch && !check.isAggregator) {
+        validCareersUrl = check.normalizedUrl;
+      } else if (check.isGenericSearch) {
+        // If user mistakenly provided a Google search link, attempt auto-resolution to genuine portal
+        const resolved = await resolveDirectCareerUrl(r.name, null);
+        validCareersUrl = resolved.isValid ? resolved.url : null;
+      }
+    }
+
     let c = byName.get(key);
     if (!c) {
       const { data: ins, error } = await db
         .from("companies")
         .insert({
           name: r.name,
-          careers_url: r.careers_url ?? null,
+          careers_url: validCareersUrl,
           category: "Added by me",
           created_by: userId,
         })
@@ -308,8 +378,8 @@ async function importRows(db: DB, userId: string, rows: z.infer<typeof rowsSchem
       c = ins;
       byName.set(key, ins);
       created++;
-    } else if (r.careers_url && !c.careers_url) {
-      await db.from("companies").update({ careers_url: r.careers_url }).eq("id", c.id);
+    } else if (validCareersUrl && !c.careers_url) {
+      await db.from("companies").update({ careers_url: validCareersUrl }).eq("id", c.id);
     }
     if (c) ids.push(c.id);
   }
@@ -519,4 +589,259 @@ export const validateActiveJobs = createServerFn({ method: "POST" })
       pruneImmediately: true,
     });
     return summary;
+  });
+
+export const searchLinkedInJobsFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        roleQuery: z.string().default("SDET"),
+        location: z.string().optional(),
+        remoteOnly: z.boolean().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: s } = await context.supabase
+      .from("user_settings")
+      .select("resume_text")
+      .eq("user_id", context.userId)
+      .maybeSingle();
+
+    const { searchLinkedInJobs } = await import("./linkedin.server");
+    return searchLinkedInJobs(s?.resume_text || "", {
+      roleQuery: data.roleQuery,
+      location: data.location,
+      remoteOnly: data.remoteOnly,
+    });
+  });
+
+export const analyzeLinkedInProfileFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        profileUrl: z.string().optional(),
+        profileText: z.string().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: s } = await context.supabase
+      .from("user_settings")
+      .select("resume_text")
+      .eq("user_id", context.userId)
+      .maybeSingle();
+
+    const { analyzeLinkedInProfile } = await import("./linkedin.server");
+    return analyzeLinkedInProfile({
+      profileUrl: data.profileUrl,
+      profileText: data.profileText,
+      existingResume: s?.resume_text || "",
+    });
+  });
+
+export const scrapeLinkedInProfileFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        profileUrl: z.string().optional(),
+        rawText: z.string().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: s } = await context.supabase
+      .from("user_settings")
+      .select("resume_text")
+      .eq("user_id", context.userId)
+      .maybeSingle();
+
+    const { scrapeAndParseLinkedInProfile } = await import("./linkedin-service");
+    return scrapeAndParseLinkedInProfile({
+      profileUrl: data.profileUrl,
+      rawText: data.rawText,
+      existingResume: s?.resume_text || "",
+    });
+  });
+
+export const evaluateProfileAgainstJobFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        jobTitle: z.string(),
+        companyName: z.string().optional(),
+        description: z.string().optional(),
+        location: z.string().optional(),
+        profileUrl: z.string().optional(),
+        rawText: z.string().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: s } = await context.supabase
+      .from("user_settings")
+      .select("resume_text")
+      .eq("user_id", context.userId)
+      .maybeSingle();
+
+    const { scrapeAndParseLinkedInProfile, evaluateProfileAgainstJob } =
+      await import("./linkedin-service");
+    const profile = await scrapeAndParseLinkedInProfile({
+      profileUrl: data.profileUrl,
+      rawText: data.rawText,
+      existingResume: s?.resume_text || "",
+    });
+
+    return evaluateProfileAgainstJob(profile, {
+      title: data.jobTitle,
+      company: data.companyName,
+      description: data.description,
+      location: data.location,
+    });
+  });
+
+export const importLinkedInJobFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        title: z.string(),
+        company: z.string(),
+        url: z.string(),
+        location: z.string().optional(),
+        score: z.number().optional(),
+        scoreSummary: z.string().optional(),
+        matchedSkills: z.array(z.string()).optional(),
+        missingSkills: z.array(z.string()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const db = context.supabase;
+    const userId = context.userId;
+
+    const compName = data.company.trim();
+    let companyId: string | null = null;
+    const { data: existingComp } = await db
+      .from("companies")
+      .select("id")
+      .ilike("name", compName)
+      .maybeSingle();
+
+    if (existingComp) {
+      companyId = existingComp.id;
+    } else {
+      const { data: newComp, error: compErr } = await db
+        .from("companies")
+        .insert({
+          name: compName,
+          category: "Discovered on LinkedIn",
+          created_by: userId,
+        })
+        .select("id")
+        .single();
+      if (!compErr && newComp) {
+        companyId = newComp.id;
+      }
+    }
+
+    if (!companyId) throw new Error("Could not register company for job");
+
+    await db
+      .from("tracked_companies")
+      .upsert(
+        { user_id: userId, company_id: companyId },
+        { onConflict: "user_id,company_id", ignoreDuplicates: true },
+      );
+
+    const now = new Date().toISOString();
+    const { data: existingJob } = await db
+      .from("jobs")
+      .select("id")
+      .eq("company_id", companyId)
+      .eq("title", data.title)
+      .maybeSingle();
+
+    if (existingJob) {
+      await db
+        .from("jobs")
+        .update({
+          url: data.url,
+          location: data.location || null,
+          score: data.score ?? null,
+          score_summary: data.scoreSummary ?? null,
+          matched_skills: data.matchedSkills ?? null,
+          missing_skills: data.missingSkills ?? null,
+          last_seen_at: now,
+          status: "open",
+        })
+        .eq("id", existingJob.id);
+      return { ok: true, jobId: existingJob.id, updated: true };
+    }
+
+    const { data: newJob, error: jobErr } = await db
+      .from("jobs")
+      .insert({
+        company_id: companyId,
+        title: data.title,
+        url: data.url,
+        location: data.location || null,
+        description: `${data.title} at ${data.company} discovered via LinkedIn`,
+        score: data.score ?? null,
+        score_summary: data.scoreSummary ?? null,
+        matched_skills: data.matchedSkills ?? null,
+        missing_skills: data.missingSkills ?? null,
+        status: "open",
+        applied: false,
+        first_seen_at: now,
+        last_seen_at: now,
+      })
+      .select("id")
+      .single();
+
+    if (jobErr) throw new Error(jobErr.message);
+
+    return { ok: true, jobId: newJob.id, created: true };
+  });
+
+export const syncLinkedInToResumeFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d) =>
+    z
+      .object({
+        formattedResume: z.string(),
+        targetRoles: z.array(z.string()).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const db = context.supabase;
+    const userId = context.userId;
+
+    const updatePayload: { resume_text: string; updated_at: string; role_keywords?: string[] } = {
+      resume_text: data.formattedResume.slice(0, 20000),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (data.targetRoles && data.targetRoles.length > 0) {
+      const { data: currentSettings } = await db
+        .from("user_settings")
+        .select("role_keywords")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      const existing = currentSettings?.role_keywords || [];
+      const merged = Array.from(new Set([...existing, ...data.targetRoles]));
+      updatePayload.role_keywords = merged;
+    }
+
+    const { error } = await db.from("user_settings").update(updatePayload).eq("user_id", userId);
+
+    if (error) throw new Error(error.message);
+
+    return { ok: true };
   });

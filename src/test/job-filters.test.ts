@@ -49,9 +49,52 @@ describe("job-filters", () => {
       expect(matchTitleCategory("Staff Software Development Engineer in Test", "all_qa")).toBe(
         true,
       );
+      // Veeam case: "Senior Software Engineer, Test"
+      expect(matchTitleCategory("Senior Software Engineer, Test", "all_qa")).toBe(true);
+      expect(matchTitleCategory("Software Engineer - Test", "all_qa")).toBe(true);
+      expect(matchTitleCategory("Senior Software Engineer, Test Automation", "all_qa")).toBe(true);
+      expect(matchTitleCategory("Senior Test Engineer", "all_qa")).toBe(true);
+
+      // Excludes purely unrelated roles
       expect(matchTitleCategory("Senior Backend Engineer", "all_qa")).toBe(false);
       expect(matchTitleCategory("Director of Product", "all_qa")).toBe(false);
       expect(matchTitleCategory("Lead 3D Artist", "all_qa")).toBe(false);
+    });
+
+    it("matches QA/SDET roles if JD or details has role-related keywords even if title is generic", () => {
+      // Role with generic title "Senior Software Engineer" but JD describes test automation
+      expect(
+        matchTitleCategory(
+          "Senior Software Engineer",
+          "all_qa",
+          "Develop scalable test automation frameworks using Selenium and Playwright for regression testing.",
+        ),
+      ).toBe(true);
+
+      expect(
+        matchTitleCategory(
+          "Software Engineer",
+          "sdet_qa",
+          "Drive automated testing and test suites using Cypress and TestNG.",
+        ),
+      ).toBe(true);
+
+      expect(
+        matchTitleCategory(
+          "Software Engineer",
+          "all_qa",
+          "Responsible for manual testing, test execution, test cases, and quality assurance.",
+        ),
+      ).toBe(true);
+
+      // Generic software engineer with pure backend JD should NOT match all_qa
+      expect(
+        matchTitleCategory(
+          "Senior Software Engineer",
+          "all_qa",
+          "Build high-throughput distributed transaction databases in C++ and Go.",
+        ),
+      ).toBe(false);
     });
 
     it("lead_manager requires BOTH leadership title AND QA/Test domain", () => {
@@ -75,9 +118,10 @@ describe("job-filters", () => {
       expect(matchTitleCategory("Engineering Manager (Backend)", "lead_manager")).toBe(false);
     });
 
-    it("sdet_qa matches automation roles and SDETs", () => {
+    it("sdet_qa matches automation roles and SDETs including Software Engineer, Test", () => {
       expect(matchTitleCategory("Lead SDET", "sdet_qa")).toBe(true);
       expect(matchTitleCategory("QA Automation Engineer", "sdet_qa")).toBe(true);
+      expect(matchTitleCategory("Senior Software Engineer, Test", "sdet_qa")).toBe(true);
       expect(
         matchTitleCategory(
           "Senior Quality Engineer - MONOPOLY GO!",
@@ -92,6 +136,7 @@ describe("job-filters", () => {
       expect(matchTitleCategory("Senior Software Engineer (Backend)", "swe_backend")).toBe(true);
       expect(matchTitleCategory("Lead QA Engineer", "swe_backend")).toBe(false);
       expect(matchTitleCategory("SDET", "swe_backend")).toBe(false);
+      expect(matchTitleCategory("Senior Software Engineer, Test", "swe_backend")).toBe(false);
     });
   });
 
@@ -171,6 +216,25 @@ describe("job-filters", () => {
       expect(matchJobSearchQuery(job, "bangalore")).toBe(true);
       expect(matchJobSearchQuery(job, "bengaluru")).toBe(true);
       expect(matchJobSearchQuery(job, "pune")).toBe(false);
+    });
+
+    it("matches Veeam Senior Software Engineer, Test when searching QA, SDET, or Test", () => {
+      const veeamJob = mockJob({
+        title: "Senior Software Engineer, Test",
+        companies: {
+          name: "Veeam",
+          careers_url: "https://careers.veeam.com",
+          category: "Cloud & Data",
+        },
+        description:
+          "Develop test automation frameworks and write automated tests for backup infrastructure.",
+        matched_skills: ["Test Automation", "C#", "Selenium", "API Testing"],
+      });
+      expect(matchJobSearchQuery(veeamJob, "qa")).toBe(true);
+      expect(matchJobSearchQuery(veeamJob, "sdet")).toBe(true);
+      expect(matchJobSearchQuery(veeamJob, "test")).toBe(true);
+      expect(matchJobSearchQuery(veeamJob, "veeam test")).toBe(true);
+      expect(matchJobSearchQuery(veeamJob, "veeam qa")).toBe(true);
     });
   });
 });

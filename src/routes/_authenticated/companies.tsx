@@ -13,10 +13,18 @@ import {
   AlertTriangle,
   ExternalLink,
   Sparkles,
+  ShieldCheck,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { getUserId, type Company, type Tracked } from "@/lib/data";
-import { importCompanies, importFromSheet, locateCareersForCompany } from "@/lib/jobs.functions";
+import { CareerUrlIndicator } from "@/components/CareerUrlIndicator";
+import {
+  importCompanies,
+  importFromSheet,
+  locateCareersForCompany,
+  validateCompanyCareerUrl,
+  auditAndCleanCompanyUrlsFn,
+} from "@/lib/jobs.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +53,8 @@ function CompaniesPage() {
   const importRows = useServerFn(importCompanies);
   const importSheet = useServerFn(importFromSheet);
   const locateCareers = useServerFn(locateCareersForCompany);
+  const auditCompanyUrls = useServerFn(auditAndCleanCompanyUrlsFn);
+  const [isAuditing, setIsAuditing] = useState(false);
   const [locatingId, setLocatingId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [sheetUrl, setSheetUrl] = useState("");
@@ -78,6 +88,44 @@ function CompaniesPage() {
     qc.invalidateQueries({ queryKey: ["tracked"] });
     qc.invalidateQueries({ queryKey: ["companies"] });
   };
+
+  async function handleAuditLinks() {
+    setIsAuditing(true);
+    try {
+      const res = await auditCompanyUrls();
+      if (res.cleanedCount > 0) {
+        toast.success(
+          `Audited ${res.totalChecked} companies: Cleaned & verified ${res.cleanedCount} career links!`,
+        );
+      } else {
+        toast.success(`All ${res.totalChecked} company links are verified direct portals.`);
+      }
+      refresh();
+    } catch {
+      toast.error("Failed to audit company career URLs");
+    } finally {
+      setIsAuditing(false);
+    }
+  }
+
+  async function handleLocateCompany(companyId: string, companyName: string) {
+    setLocatingId(companyId);
+    try {
+      const res = await locateCareers({
+        data: { companyId, companyName },
+      });
+      if (res.ok) {
+        toast.success(`Verified & updated canonical URL: ${res.url}`);
+        refresh();
+      } else {
+        toast.error(res.error);
+      }
+    } catch {
+      toast.error("Could not locate canonical URL via Search API");
+    } finally {
+      setLocatingId(null);
+    }
+  }
 
   async function track(c: Company) {
     const { error } = await supabase
@@ -138,6 +186,19 @@ function CompaniesPage() {
         <section>
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">Your list · {tracked.data?.length ?? 0}</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7 gap-1.5"
+              disabled={isAuditing}
+              onClick={handleAuditLinks}
+              title="Query search API for '[Company Name] career page' and update records with official canonical URLs, replacing generic search links."
+            >
+              <Sparkles
+                className={`h-3.5 w-3.5 text-primary ${isAuditing ? "animate-spin" : ""}`}
+              />
+              {isAuditing ? "Searching Canonical URLs..." : "Auto-Update via Search API"}
+            </Button>
           </div>
           <div className="mt-3 divide-y rounded-xl border bg-card shadow-card">
             {(tracked.data ?? []).length === 0 && (
@@ -148,56 +209,55 @@ function CompaniesPage() {
             {(tracked.data ?? []).map((t) => (
               <div key={t.id} className="flex items-center gap-3 p-3">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 font-medium">
-                    {t.companies?.name}
+                  <div className="flex items-center gap-2 font-medium flex-wrap">
+                    <span className="text-sm font-semibold">{t.companies?.name}</span>
+                    <CareerUrlIndicator
+                      url={t.companies?.careers_url}
+                      companyName={t.companies?.name}
+                      showFixButton={true}
+                      isFixing={locatingId === t.company_id}
+                      onFix={() =>
+                        t.companies && handleLocateCompany(t.company_id, t.companies.name)
+                      }
+                    />
                     {t.last_error && (
                       <span title={t.last_error}>
                         <AlertTriangle className="h-3.5 w-3.5 text-warning" />
                       </span>
                     )}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">
+                  <div className="truncate text-xs text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
                     {t.companies?.careers_url ? (
                       <a
                         href={t.companies.careers_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                        className="inline-flex items-center gap-1 text-primary hover:underline max-w-md truncate"
                         title={t.companies.careers_url}
                       >
-                        {t.companies.careers_url}
-                        <ExternalLink className="h-3 w-3" />
+                        <span className="truncate">{t.companies.careers_url}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0" />
                       </a>
                     ) : (
-                      <span className="italic">No careers link — AI will locate upon scan</span>
+                      <span className="italic">No careers link configured</span>
                     )}
-                    {t.last_checked_at &&
-                      ` · checked ${new Date(t.last_checked_at).toLocaleString()}`}
+                    {t.last_checked_at && (
+                      <span className="text-muted-foreground/75 shrink-0">
+                        · checked{" "}
+                        {new Date(t.last_checked_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <Button
                   size="icon"
                   variant="ghost"
-                  title="Locate official careers page with Gemini AI"
+                  title="Search API: Query '[Company Name] career page' and update canonical URL"
                   disabled={locatingId === t.company_id}
-                  onClick={async () => {
-                    if (!t.companies) return;
-                    setLocatingId(t.company_id);
-                    try {
-                      const res = await locateCareers({
-                        data: { companyId: t.company_id, companyName: t.companies.name },
-                      });
-                      if (res.ok) {
-                        toast.success(`Located careers link: ${res.url}`);
-                        refresh();
-                      } else {
-                        toast.error(res.error);
-                      }
-                    } catch {
-                      toast.error("Could not locate careers URL");
-                    }
-                    setLocatingId(null);
-                  }}
+                  onClick={() => t.companies && handleLocateCompany(t.company_id, t.companies.name)}
                 >
                   <Sparkles
                     className={`h-4 w-4 text-primary ${locatingId === t.company_id ? "animate-spin" : ""}`}
@@ -238,9 +298,12 @@ function CompaniesPage() {
                 <div key={c.id} className="flex items-center gap-2 py-1.5">
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{c.name}</div>
-                    <Badge variant="secondary" className="text-[10px]">
-                      {c.category}
-                    </Badge>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <Badge variant="secondary" className="text-[10px]">
+                        {c.category}
+                      </Badge>
+                      <CareerUrlIndicator url={c.careers_url} compact />
+                    </div>
                   </div>
                   {trackedIds.has(c.id) ? (
                     <Check className="h-4 w-4 text-success" />
@@ -319,8 +382,10 @@ function CompanyDialog({
 }) {
   const isNew = value === "new";
   const c = value && value !== "new" ? value : null;
+  const validateUrl = useServerFn(validateCompanyCareerUrl);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [isValidating, setIsValidating] = useState(false);
   const key = isNew ? "new" : c?.id;
   const [lastKey, setLastKey] = useState<string | undefined>();
   if (key !== lastKey) {
@@ -329,18 +394,86 @@ function CompanyDialog({
     setUrl(c?.careers_url ?? "");
   }
 
-  async function save() {
-    if (!name.trim()) return;
-    const careers_url = url.trim() || null;
-    if (careers_url && !/^https?:\/\//.test(careers_url)) {
-      toast.error("Link must start with http:// or https://");
+  const isSearchQuery = Boolean(
+    url && /(?:google\.[a-z.]+\/search|bing\.com\/search|search\.yahoo\.com)/i.test(url),
+  );
+
+  async function handleAutoLocate() {
+    if (!name.trim()) {
+      toast.error("Please enter a company name first.");
       return;
     }
+    setIsValidating(true);
+    try {
+      const res = await validateUrl({ data: { url: url.trim(), companyName: name.trim() } });
+      if (res.resolvedUrl) {
+        setUrl(res.resolvedUrl);
+        toast.success(`Found direct careers portal: ${res.resolvedUrl}`);
+      } else if (res.isValid && res.normalizedUrl) {
+        setUrl(res.normalizedUrl);
+        toast.success(`Verified: ${res.reason}`);
+      } else {
+        toast.error("Could not auto-locate direct portal. Please enter it manually.");
+      }
+    } catch {
+      toast.error("Failed to auto-locate portal");
+    } finally {
+      setIsValidating(false);
+    }
+  }
+
+  async function save() {
+    if (!name.trim()) return;
+    const cleanUrl = url.trim() || null;
+    let finalUrl = cleanUrl;
+
+    if (cleanUrl) {
+      if (!/^https?:\/\//i.test(cleanUrl)) {
+        toast.error("Link must start with http:// or https://");
+        return;
+      }
+      setIsValidating(true);
+      try {
+        const check = await validateUrl({
+          data: { url: cleanUrl, companyName: name.trim() },
+        });
+        if (check.isGenericSearch) {
+          toast.error(
+            "Flagged: Generic Google search links cannot be scanned for jobs. Please provide a direct careers site or click Auto-Locate.",
+          );
+          if (check.resolvedUrl) {
+            setUrl(check.resolvedUrl);
+          }
+          setIsValidating(false);
+          return;
+        }
+        if (check.isAggregator) {
+          toast.error(
+            "Flagged: Generic job aggregator queries (e.g. Indeed search) cannot be scanned. Please provide the company's direct portal.",
+          );
+          setIsValidating(false);
+          return;
+        }
+        if (check.normalizedUrl) {
+          finalUrl = check.normalizedUrl;
+        }
+      } catch {
+        // Non-fatal, proceed with caution
+      } finally {
+        setIsValidating(false);
+      }
+    }
+
     if (isNew) {
       const uid = await getUserId();
       const { data, error } = await supabase
         .from("companies")
-        .insert({ name: name.trim(), careers_url, category: "Added by me", created_by: uid })
+        .insert({
+          name: name.trim(),
+          careers_url: finalUrl,
+          category: "Added by me",
+          created_by: uid,
+        })
         .select("id")
         .single();
       if (error) {
@@ -351,7 +484,10 @@ function CompanyDialog({
       }
       await supabase.from("tracked_companies").insert({ user_id: uid, company_id: data.id });
     } else if (c) {
-      const { error } = await supabase.from("companies").update({ careers_url }).eq("id", c.id);
+      const { error } = await supabase
+        .from("companies")
+        .update({ careers_url: finalUrl })
+        .eq("id", c.id);
       if (error) {
         toast.error(error.message);
         return;
@@ -367,26 +503,64 @@ function CompanyDialog({
         <DialogHeader>
           <DialogTitle>{isNew ? "Add a company" : c?.name}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="space-y-4">
           {isNew && (
             <div className="space-y-1.5">
               <Label>Company name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <Input
+                placeholder="e.g. Scopely, Swiggy, Atlassian"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </div>
           )}
           <div className="space-y-1.5">
-            <Label>Careers page link</Label>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Label>Careers page link</Label>
+                <CareerUrlIndicator url={url} compact />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 text-xs text-primary px-1.5"
+                disabled={isValidating || !name.trim()}
+                onClick={handleAutoLocate}
+              >
+                <Sparkles className={`mr-1 h-3 w-3 ${isValidating ? "animate-spin" : ""}`} />
+                Auto-Locate Direct Portal
+              </Button>
+            </div>
             <Input
-              placeholder="https://company.com/careers"
+              placeholder="https://company.com/careers or https://job-boards.greenhouse.io/company"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
+              className={isSearchQuery ? "border-amber-500 focus-visible:ring-amber-500" : ""}
             />
-            <p className="text-xs text-muted-foreground">
-              Leave empty and we'll try to find it automatically.
-            </p>
+            {url && (
+              <div className="pt-0.5">
+                <CareerUrlIndicator url={url} />
+              </div>
+            )}
+            {isSearchQuery ? (
+              <div className="rounded-md bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Generic Google search query detected.</strong> RoleRadar needs a direct
+                  career site link (e.g. Greenhouse, Lever, Workday, or company.com/careers) to
+                  scrape active job listings. Click <em>Auto-Locate Direct Portal</em> above to find
+                  it.
+                </span>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Direct ATS job board or company career page (e.g., Greenhouse, Lever, Workday).
+              </p>
+            )}
           </div>
-          <Button variant="ink" className="w-full" onClick={save}>
-            Save
+          <Button variant="ink" className="w-full" disabled={isValidating} onClick={save}>
+            {isValidating ? "Verifying link..." : "Save Company"}
           </Button>
         </div>
       </DialogContent>
