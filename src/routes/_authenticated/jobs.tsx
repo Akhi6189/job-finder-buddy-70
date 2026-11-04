@@ -22,24 +22,16 @@ import {
   ChevronUp,
   Search,
   SlidersHorizontal,
-  Building2,
-  Briefcase,
   X,
   RotateCcw,
   ArrowUpDown,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { daysSince, isRemote, getExactJobPostingUrl, loadSettings, type Job } from "@/lib/data";
-import { matchLocation, matchTitleCategory, matchJobSearchQuery } from "@/lib/job-filters";
-import {
-  scanCompany,
-  rescoreJob,
-  rescoreAllJobs,
-  tailorResumeForJob,
-  validateActiveJobs,
-} from "@/lib/jobs.functions";
+import { matchLocation, matchJobSearchQuery } from "@/lib/job-filters";
+import { getCompanyIndustry } from "@/lib/industry";
+import { scanCompany, rescoreJob, tailorResumeForJob } from "@/lib/jobs.functions";
 import { saveOrUpdateFromJob } from "@/lib/applications";
-import { getCompanyIndustry, ALL_INDUSTRIES, type Industry } from "@/lib/industry";
 import { ScoreRing } from "@/components/ScoreRing";
 import { LinkedInProfileMatcher } from "@/components/LinkedInProfileMatcher";
 import { Button } from "@/components/ui/button";
@@ -85,9 +77,7 @@ function JobsPage() {
   const qc = useQueryClient();
   const searchParams = Route.useSearch();
   const scan = useServerFn(scanCompany);
-  const scoreAll = useServerFn(rescoreAllJobs);
   const rescore = useServerFn(rescoreJob);
-  const validate = useServerFn(validateActiveJobs);
   const [tab, setTab] = useState(searchParams?.tab || "open");
 
   useEffect(() => {
@@ -98,17 +88,12 @@ function JobsPage() {
 
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: loadSettings });
   const [q, setQ] = useState("");
-  const [titleCategory, setTitleCategory] = useState("all");
   const [locPreset, setLocPreset] = useState("all");
-  const [loc, setLoc] = useState("");
-  const [industry, setIndustry] = useState<Industry>("All");
   const [scoreTier, setScoreTier] = useState("all");
   const [sortBy, setSortBy] = useState("score_desc");
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [selected, setSelected] = useState<Job | null>(null);
   const [tailorTarget, setTailorTarget] = useState<Job | null>(null);
-  const [isScoringAll, setIsScoringAll] = useState(false);
-  const [isValidatingUrls, setIsValidatingUrls] = useState(false);
   const [scoringSingleId, setScoringSingleId] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(
     null,
@@ -166,28 +151,9 @@ function JobsPage() {
     // Remote only
     if (remoteOnly) l = l.filter(isRemote);
 
-    // Job Title Category filter
-    if (titleCategory !== "all") {
-      l = l.filter((j) =>
-        matchTitleCategory(j.title, titleCategory, j.description, j.matched_skills),
-      );
-    }
-
     // Location Preset Filter
     if (locPreset !== "all") {
       l = l.filter((j) => matchLocation(j.location, locPreset));
-    }
-
-    // Custom Location text filter
-    if (loc.trim()) {
-      l = l.filter((j) => matchLocation(j.location, loc.trim()));
-    }
-
-    // Industry filter
-    if (industry !== "All") {
-      l = l.filter(
-        (j) => getCompanyIndustry(j.companies?.name, j.companies?.category) === industry,
-      );
     }
 
     // ATS Match Score Tier filter
@@ -216,7 +182,7 @@ function JobsPage() {
         return (a.companies?.name ?? "").localeCompare(b.companies?.name ?? "");
       return (b.score ?? -1) - (a.score ?? -1);
     });
-  }, [jobs.data, tab, q, loc, locPreset, titleCategory, industry, scoreTier, sortBy, remoteOnly]);
+  }, [jobs.data, tab, q, locPreset, scoreTier, sortBy, remoteOnly]);
 
   const counts = {
     open: (jobs.data ?? []).filter((j) => j.status !== "applied" && !j.closed_at).length,
@@ -224,69 +190,40 @@ function JobsPage() {
   };
 
   const hasActiveFilters =
-    q.trim() !== "" ||
-    loc.trim() !== "" ||
-    locPreset !== "all" ||
-    titleCategory !== "all" ||
-    industry !== "All" ||
-    scoreTier !== "all" ||
-    remoteOnly;
+    q.trim() !== "" || locPreset !== "all" || scoreTier !== "all" || remoteOnly;
 
   function clearAllFilters() {
     setQ("");
-    setLoc("");
     setLocPreset("all");
-    setTitleCategory("all");
-    setIndustry("All");
     setScoreTier("all");
     setRemoteOnly(false);
   }
 
-  async function handleValidateUrls() {
-    setIsValidatingUrls(true);
-    try {
-      const r = await validate();
-      if (r.prunedCount > 0) {
-        toast.success(
-          `Validation complete: ${r.activeCount} active roles verified, ${r.prunedCount} dead or closed role${r.prunedCount === 1 ? "" : "s"} removed.`,
-        );
-      } else {
-        toast.success(
-          `Verified: All ${r.activeCount} open roles have active, live application URLs!`,
-        );
-      }
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Validation check failed");
-    }
-    setIsValidatingUrls(false);
-  }
+  async function handleScanWithFilters() {
+    // a. First of all look for the filter conditions placed in the filter section
+    const activeFilterLabels: string[] = [];
+    if (q.trim()) activeFilterLabels.push(`keyword "${q.trim()}"`);
+    if (remoteOnly) activeFilterLabels.push("remote only");
+    if (locPreset !== "all") activeFilterLabels.push(`location: ${locPreset}`);
+    if (scoreTier !== "all") activeFilterLabels.push(`score tier: ${scoreTier}`);
 
-  async function handleScoreAll() {
-    setIsScoringAll(true);
-    try {
-      const r = await scoreAll();
-      toast.success(`Scored ${r.scored} roles against your resume.`);
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Scoring failed");
-    }
-    setIsScoringAll(false);
-  }
+    const filterSummary =
+      activeFilterLabels.length > 0
+        ? `Filtered by: ${activeFilterLabels.join(", ")}`
+        : "No filters active";
 
-  async function scanAll() {
     const { data: tracked } = await supabase
       .from("tracked_companies")
       .select("id, companies(name)");
+
     if (!tracked?.length) {
-      toast.info("Add some companies first.");
+      toast.info("Add some companies on the Companies page first.");
       return;
     }
 
-    // Clear previous unapplied roles immediately so stale cached results disappear on fresh scan
-    await supabase.from("jobs").delete().neq("status", "applied");
-    qc.setQueryData<Job[]>(["jobs"], (old) => (old ?? []).filter((j) => j.status === "applied"));
-    qc.invalidateQueries({ queryKey: ["jobs"] });
+    toast.info(`Scanning ${tracked.length} tracked companies…`, {
+      description: filterSummary,
+    });
 
     let added = 0;
     const failed: string[] = [];
@@ -302,19 +239,63 @@ function JobsPage() {
       } else {
         failed.push(name);
       }
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-      // Minor pacing delay so requests stay within API thresholds
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
     setProgress(null);
-    toast.success(`Fresh scan finished: ${added} role${added === 1 ? "" : "s"} found.`, {
-      description: failed.length
-        ? `Couldn't read: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`
-        : undefined,
-    });
 
-    // Auto-trigger URL status verification on newly found roles
-    validate().catch(() => {});
+    // b. Pull all the job openings into memory and then only display the ones based on the filter
+    const { data: allFreshJobs, error: fetchErr } = await supabase
+      .from("jobs")
+      .select("*, companies(name, careers_url, category)")
+      .neq("status", "inactive")
+      .order("first_seen_at", { ascending: false })
+      .limit(1500);
+
+    if (fetchErr) {
+      toast.error(`Scan completed, but couldn't fetch jobs: ${fetchErr.message}`);
+      return;
+    }
+
+    const freshList = (allFreshJobs as Job[]) || [];
+    // Populate query cache memory with ALL job openings
+    qc.setQueryData<Job[]>(["jobs"], freshList);
+
+    // Calculate how many match the active filter conditions
+    const matchedCount = freshList.filter((j) => {
+      if (j.status === "inactive" || (j.closed_at && j.status !== "applied")) return false;
+      if (tab === "open" && (j.status === "applied" || j.status === "inactive")) return false;
+      if (tab === "applied" && j.status !== "applied") return false;
+      if (remoteOnly && !isRemote(j)) return false;
+      if (locPreset !== "all" && !matchLocation(j.location, locPreset)) return false;
+      if (scoreTier !== "all") {
+        if (scoreTier === "90plus" && (j.score ?? 0) < 90) return false;
+        if (scoreTier === "80plus" && (j.score ?? 0) < 80) return false;
+        if (scoreTier === "60plus" && (j.score ?? 0) < 60) return false;
+        if (scoreTier === "under60" && (j.score == null || j.score >= 60)) return false;
+      }
+      if (q.trim() && !matchJobSearchQuery(j, q)) return false;
+      return true;
+    }).length;
+
+    if (activeFilterLabels.length > 0) {
+      toast.success(
+        `Scan complete: ${freshList.length} total openings pulled into memory. Displaying ${matchedCount} matching your filters.`,
+        {
+          description: failed.length
+            ? `Couldn't reach: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`
+            : "Clear or reset filters anytime to reveal all openings.",
+        },
+      );
+    } else {
+      toast.success(
+        `Scan complete: ${freshList.length} total openings pulled into memory. Showing all openings.`,
+        {
+          description: failed.length
+            ? `Couldn't reach: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`
+            : undefined,
+        },
+      );
+    }
   }
 
   return (
@@ -323,36 +304,6 @@ function JobsPage() {
         <div>
           <div className="label-mono">Radar</div>
           <h1 className="text-3xl font-extrabold tracking-tight">Open roles</h1>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleValidateUrls}
-            disabled={isValidatingUrls || isScoringAll || !!progress}
-            title="Run server-side validation script to check HTTP status codes and ensure only active roles are shown"
-          >
-            <ShieldCheck
-              className={`h-4 w-4 mr-1 text-emerald-600 ${isValidatingUrls ? "animate-spin" : ""}`}
-            />
-            {isValidatingUrls ? "Verifying active URLs…" : "Verify Live URLs"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleScoreAll}
-            disabled={isScoringAll || isValidatingUrls || !!progress}
-            title="Recompute authentic ATS match score across all roles using top-company screening rubric"
-          >
-            <Sparkles
-              className={`h-4 w-4 mr-1 text-primary ${isScoringAll ? "animate-spin" : ""}`}
-            />
-            {isScoringAll ? "Scoring all roles against resume…" : "Re-score all with resume"}
-          </Button>
-          <Button variant="ink" onClick={scanAll} disabled={!!progress || isValidatingUrls}>
-            <RefreshCw className={progress ? "animate-spin" : ""} />
-            {progress ? `Scanning ${progress.done + 1}/${progress.total}` : "Scan now"}
-          </Button>
         </div>
       </div>
       {progress && (
@@ -412,9 +363,9 @@ function JobsPage() {
         <>
           {/* Comprehensive Filtering Dashboard System */}
           <div className="mt-4 space-y-3 rounded-xl border bg-card p-4 shadow-xs">
-            {/* Row 1: Search + Remote Toggle */}
+            {/* Row 1: Search + Remote Toggle + Scan Button */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-1 items-center gap-2 min-w-[240px] max-w-md">
+              <div className="flex flex-1 items-center gap-2 min-w-[240px] max-w-xl">
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -441,34 +392,24 @@ function JobsPage() {
                   {remoteOnly ? "✓ " : ""}Remote only
                 </Button>
               </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ink"
+                  size="sm"
+                  onClick={handleScanWithFilters}
+                  disabled={!!progress}
+                  className="shrink-0 gap-1.5 font-medium shadow-xs"
+                >
+                  <RefreshCw className={`h-4 w-4 ${progress ? "animate-spin" : ""}`} />
+                  {progress ? `Scanning ${progress.done + 1}/${progress.total}…` : "Scan"}
+                </Button>
+              </div>
             </div>
 
-            {/* Row 2: Category, Location, Industry, ATS Score, Sort */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-1">
-              {/* 1. Job Title Filter */}
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                  <Briefcase className="h-3 w-3" /> Job Title
-                </label>
-                <Select value={titleCategory} onValueChange={setTitleCategory}>
-                  <SelectTrigger className="w-full h-9 bg-background text-xs">
-                    <SelectValue placeholder="All Titles" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Job Titles</SelectItem>
-                    <SelectItem value="all_qa">All QA, SDET & Test Roles (Recommended)</SelectItem>
-                    <SelectItem value="sdet_qa">SDET & Automation QA</SelectItem>
-                    <SelectItem value="manual_qa">QA Engineer & Quality Analyst</SelectItem>
-                    <SelectItem value="lead_manager">QA Lead & QA/Test Manager</SelectItem>
-                    <SelectItem value="performance_security">Performance & Security QA</SelectItem>
-                    <SelectItem value="swe_backend">Software Engineer (Backend / SDE)</SelectItem>
-                    <SelectItem value="frontend_fullstack">Frontend & Full Stack</SelectItem>
-                    <SelectItem value="devops_cloud">DevOps & Cloud SRE</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* 2. Location Filter */}
+            {/* Row 2: Location, ATS Match Score, Sort By */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+              {/* 1. Location Filter */}
               <div className="space-y-1">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                   <MapPin className="h-3 w-3" /> Location
@@ -490,26 +431,7 @@ function JobsPage() {
                 </Select>
               </div>
 
-              {/* 3. Industry Filter */}
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                  <Building2 className="h-3 w-3" /> Industry
-                </label>
-                <Select value={industry} onValueChange={(val) => setIndustry(val as Industry)}>
-                  <SelectTrigger className="w-full h-9 bg-background text-xs">
-                    <SelectValue placeholder="All Industries" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ALL_INDUSTRIES.map((ind) => (
-                      <SelectItem key={ind} value={ind}>
-                        {ind === "All" ? "All Industries" : ind}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* 4. ATS Match Score Tier */}
+              {/* 2. ATS Match Score Tier */}
               <div className="space-y-1">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                   <Sparkles className="h-3 w-3" /> ATS Match Score
@@ -528,7 +450,7 @@ function JobsPage() {
                 </Select>
               </div>
 
-              {/* 5. Sort By */}
+              {/* 3. Sort By */}
               <div className="space-y-1">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                   <ArrowUpDown className="h-3 w-3" /> Sort By
@@ -552,24 +474,8 @@ function JobsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t text-xs">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="font-semibold text-foreground">
-                  Showing {list.length} of {tab === "open" ? counts.open : counts.applied} roles
+                  Showing {list.length} of {tab === "open" ? counts.open : counts.applied} openings
                 </span>
-
-                {titleCategory !== "all" && (
-                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                    Title:{" "}
-                    {titleCategory === "all_qa"
-                      ? "All QA & SDET"
-                      : titleCategory === "sdet_qa"
-                        ? "SDET & Automation"
-                        : titleCategory === "manual_qa"
-                          ? "QA & Quality Analyst"
-                          : titleCategory === "lead_manager"
-                            ? "QA Lead & Manager"
-                            : titleCategory.replace(/_/g, " ")}
-                    <X className="h-3 w-3 cursor-pointer" onClick={() => setTitleCategory("all")} />
-                  </Badge>
-                )}
 
                 {locPreset !== "all" && (
                   <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
@@ -580,13 +486,6 @@ function JobsPage() {
                         ? "Delhi NCR / Gurgaon"
                         : locPreset.charAt(0).toUpperCase() + locPreset.slice(1)}
                     <X className="h-3 w-3 cursor-pointer" onClick={() => setLocPreset("all")} />
-                  </Badge>
-                )}
-
-                {industry !== "All" && (
-                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
-                    Industry: {industry}
-                    <X className="h-3 w-3 cursor-pointer" onClick={() => setIndustry("All")} />
                   </Badge>
                 )}
 
@@ -610,17 +509,34 @@ function JobsPage() {
                     <X className="h-3 w-3 cursor-pointer" onClick={() => setRemoteOnly(false)} />
                   </Badge>
                 )}
+
+                {q.trim() && (
+                  <Badge variant="secondary" className="gap-1 text-[11px] py-0.5">
+                    Keyword: "{q.trim()}"
+                    <X className="h-3 w-3 cursor-pointer" onClick={() => setQ("")} />
+                  </Badge>
+                )}
               </div>
 
               {hasActiveFilters && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearAllFilters}
-                  className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <RotateCcw className="h-3 w-3 mr-1" /> Reset all filters
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={clearAllFilters}
+                    className="h-7 text-xs font-medium"
+                  >
+                    Show all openings ({tab === "open" ? counts.open : counts.applied})
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearAllFilters}
+                    className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" /> Reset filters
+                  </Button>
+                </div>
               )}
             </div>
           </div>
@@ -629,13 +545,30 @@ function JobsPage() {
             <p className="mt-10 text-muted-foreground">Loading…</p>
           ) : list.length === 0 ? (
             <div className="mt-10 rounded-xl border border-dashed bg-card p-10 text-center">
-              <p className="font-semibold">No roles here yet</p>
+              <p className="font-semibold">
+                {hasActiveFilters ? "No matching roles found" : "No roles here yet"}
+              </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Add companies on the{" "}
-                <Link to="/companies" className="text-primary underline">
-                  Companies
-                </Link>{" "}
-                page, then press Scan now.
+                {hasActiveFilters ? (
+                  <>
+                    Try adjusting or{" "}
+                    <button
+                      onClick={clearAllFilters}
+                      className="text-primary underline font-medium"
+                    >
+                      clearing your filters
+                    </button>{" "}
+                    to view all available openings.
+                  </>
+                ) : (
+                  <>
+                    Add companies on the{" "}
+                    <Link to="/companies" className="text-primary underline">
+                      Companies
+                    </Link>{" "}
+                    page, then click Scan in the search filter.
+                  </>
+                )}
               </p>
             </div>
           ) : (

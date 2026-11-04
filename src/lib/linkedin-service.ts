@@ -746,15 +746,13 @@ export async function scrapeAndParseLinkedInProfile(input: {
   // 4. Generate Target Role Fit
   const suggestedTargetRoles = generateTargetRoleFit(headline, totalYears, skills, context);
 
-  // 5. Try AI Enrichment via Gemini if available
-  const apiKey = process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"];
+  const { getGeminiClient, getValidGeminiApiKey } =
+    await import("./canonical-career-search.server");
+  const apiKey = getValidGeminiApiKey();
   if (apiKey) {
     try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-      });
+      const ai = getGeminiClient();
+      if (!ai) throw new Error("AI not initialized");
 
       const prompt = `You are an elite executive tech recruiter and talent architect.
 Extract and enrich this candidate's verified LinkedIn profile data:

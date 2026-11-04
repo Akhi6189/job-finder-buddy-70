@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
-import { GoogleGenAI } from "@google/genai";
 
 type DB = SupabaseClient<Database>;
 
@@ -132,9 +131,214 @@ export const VERIFIED_PORTAL_DIRECTORY: Record<string, string> = {
   makemytrip: "https://careers.makemytrip.com/",
   nykaa: "https://www.nykaa.com/careers",
   dream11: "https://www.dreamsports.group/careers",
-  groww: "https://groww.in/careers",
+  veeam: "https://careers.veeam.com/",
+  "veeam software": "https://careers.veeam.com/",
+  zepto: "https://boards.greenhouse.io/zepto",
+  phonepe: "https://phonepe.com/careers/",
+  "urban company": "https://www.urbancompany.com/careers",
+  "cult.fit": "https://cult.fit/careers",
+  curefit: "https://cult.fit/careers",
+  rapido: "https://rapido.workable.com/",
+  licious: "https://licious.darwinbox.in/ms/candidate/careers",
+  bharatpe: "https://bharatpe.com/careers",
+  porter: "https://porter.in/careers",
+  shadowfax: "https://shadowfax.in/careers",
+  lenskart: "https://lenskart.darwinbox.in/ms/candidate/careers",
+  delhivery: "https://www.delhivery.com/careers",
+  spinny: "https://www.spinny.com/careers/",
+  cars24: "https://careers.cars24.com/",
+  stripe: "https://stripe.com/jobs/search",
+  twilio: "https://www.twilio.com/en-us/company/jobs",
+  datadog: "https://careers.datadoghq.com/",
+  snowflake: "https://careers.snowflake.com/",
+  databricks: "https://www.databricks.com/company/careers",
+  mongodb: "https://www.mongodb.com/careers",
+  elastic: "https://jobs.elastic.co/",
+  splunk: "https://www.splunk.com/en_us/careers.html",
+  servicenow: "https://careers.servicenow.com/",
+  workday: "https://www.workday.com/en-us/company/careers.html",
+  "palo alto networks": "https://jobs.paloaltonetworks.com/",
+  "ge healthcare": "https://careers.gehealthcare.com/global/en",
+  gehealthcare: "https://careers.gehealthcare.com/global/en",
+  "ge healthcare india": "https://careers.gehealthcare.com/global/en",
+  target: "https://corporate.target.com/careers",
+  "target india": "https://corporate.target.com/careers",
+  "applied materials": "https://jobs.appliedmaterials.com/search-jobs/India",
+  "applied materials india": "https://jobs.appliedmaterials.com/search-jobs/India",
+  "walmart global tech": "https://tech.walmart.com/content/walmart-global-tech/en_us/careers.html",
+  "walmart global tech india":
+    "https://tech.walmart.com/content/walmart-global-tech/en_us/careers.html",
+  walmart: "https://tech.walmart.com/content/walmart-global-tech/en_us/careers.html",
+  bosch: "https://jobs.bosch.com/en/",
+  "bosch global": "https://jobs.bosch.com/en/",
+  "robert bosch": "https://jobs.bosch.com/en/",
+  broadcom: "https://www.broadcom.com/company/careers",
+  zoho: "https://www.zoho.com/careers/",
+  "zoho corporation": "https://www.zoho.com/careers/",
+  "schneider electric": "https://careers.se.com/careers-at-schneider-electric",
+  "sap labs": "https://jobs.sap.com/",
+  "sap labs india": "https://jobs.sap.com/",
+  sap: "https://jobs.sap.com/",
+  philips: "https://careers.philips.com/",
+  "philips india": "https://careers.philips.com/",
+  "american express": "https://jobs.americanexpress.com/",
+  "american express india": "https://jobs.americanexpress.com/",
+  amex: "https://jobs.americanexpress.com/",
+  "american express global business travel":
+    "https://amexglobalbusinesstravel.wd1.myworkdayjobs.com/amexgbt",
+  arm: "https://careers.arm.com/",
+  "arm holding": "https://careers.arm.com/",
+  "ather energy": "https://atherenergy.com/careers",
+  ather: "https://atherenergy.com/careers",
+  blinkit: "https://blinkit.com/careers",
+  clevertap: "https://clevertap.com/careers/",
+  coindcx: "https://coindcx.com/careers",
+  coinswitch: "https://coinswitch.co/careers",
+  "d.e shaw india": "https://www.deshawindia.com/careers",
+  "d.e. shaw": "https://www.deshawindia.com/careers",
+  "de shaw": "https://www.deshawindia.com/careers",
+  chegg: "https://jobs.chegg.com/",
+  cheggindia: "https://jobs.chegg.com/",
+  healthedge: "https://www.healthedge.com/careers",
+  honeywell: "https://careers.honeywell.com/us/en",
+  "honeywell india": "https://careers.honeywell.com/us/en",
+  crowdstrike: "https://www.crowdstrike.com/careers/",
+  okta: "https://www.okta.com/company/careers/",
+  zscaler: "https://www.zscaler.com/careers",
+  rubrik: "https://www.rubrik.com/company/careers",
+  cohesity: "https://www.cohesity.com/company/careers/",
+  "pure storage": "https://www.purestorage.com/company/careers.html",
+  nutanix: "https://www.nutanix.com/company/careers",
+  netapp: "https://www.netapp.com/company/careers/",
+  vmware: "https://careers.vmware.com/",
+  dell: "https://jobs.dell.com/",
+  hp: "https://jobs.hp.com/",
+  ibm: "https://www.ibm.com/careers",
+  intel: "https://jobs.intel.com/en",
+  amd: "https://careers.amd.com/",
+  "morgan stanley": "https://www.morganstanley.com/people-opportunities/careers",
+  "goldman sachs": "https://www.goldmansachs.com/careers/",
+  "jpmorgan chase": "https://careers.jpmorgan.com/",
   zerodha: "https://careers.zerodha.com/",
+  "national instruments": "https://www.ni.com/en/about-ni/careers.html",
+  "national instruments (ni)": "https://www.ni.com/en/about-ni/careers.html",
+  "national instruments ni": "https://www.ni.com/en/about-ni/careers.html",
+  ni: "https://www.ni.com/en/about-ni/careers.html",
+  "emerson / ni": "https://www.ni.com/en/about-ni/careers.html",
+  emerson: "https://www.emerson.com/en-us/careers",
+  "tata consultancy services (tcs)": "https://www.tcs.com/careers",
+  "hewlett packard (hp)": "https://jobs.hp.com/",
+  "electronic arts (ea)": "https://jobs.ea.com/en_US/careers/Home/",
+  "advanced micro devices (amd)": "https://careers.amd.com/",
+  "advanced micro devices": "https://careers.amd.com/",
+  siemens: "https://jobs.siemens.com/",
+  "siemens digital industries": "https://jobs.siemens.com/",
+  "siemens digital industries software": "https://jobs.siemens.com/",
+  "siemens healthineers": "https://jobs.siemens-healthineers.com/",
+  symplr: "https://www.symplr.com/careers",
 };
+
+/**
+ * Mapping of dead, outdated or regional-broken career portal subdomains to their verified canonical entrypoints.
+ */
+export const KNOWN_DEAD_PORTAL_REDIRECTS: Record<string, string> = {
+  "job-boards.greenhouse.io/gehealthcare": "https://careers.gehealthcare.com/global/en",
+  "boards.greenhouse.io/gehealthcare": "https://careers.gehealthcare.com/global/en",
+  "job-boards.greenhouse.io/target": "https://corporate.target.com/careers",
+  "boards.greenhouse.io/target": "https://corporate.target.com/careers",
+  "job-boards.greenhouse.io/appliedmaterials":
+    "https://jobs.appliedmaterials.com/search-jobs/India",
+  "careers.appliedmaterials.com": "https://jobs.appliedmaterials.com/search-jobs/India",
+  "job-boards.greenhouse.io/walmartglobaltech":
+    "https://tech.walmart.com/content/walmart-global-tech/en_us/careers.html",
+  "job-boards.greenhouse.io/americanexpress": "https://jobs.americanexpress.com/",
+  "job-boards.greenhouse.io/americanexpressglobalbusinesstravel":
+    "https://amexglobalbusinesstravel.wd1.myworkdayjobs.com/amexgbt",
+  "job-boards.greenhouse.io/arm": "https://careers.arm.com/",
+  "job-boards.greenhouse.io/atherenergy": "https://atherenergy.com/careers",
+  "job-boards.greenhouse.io/blinkit": "https://blinkit.com/careers",
+  "job-boards.greenhouse.io/bosch": "https://jobs.bosch.com/en/",
+  "job-boards.greenhouse.io/broadcom": "https://www.broadcom.com/company/careers",
+  "job-boards.greenhouse.io/chegg": "https://jobs.chegg.com/",
+  "job-boards.greenhouse.io/clevertap": "https://clevertap.com/careers/",
+  "job-boards.greenhouse.io/coindcx": "https://coindcx.com/careers",
+  "job-boards.greenhouse.io/coinswitch": "https://coinswitch.co/careers",
+  "job-boards.greenhouse.io/deshawindia": "https://www.deshawindia.com/careers",
+  "job-boards.greenhouse.io/zoho": "https://www.zoho.com/careers/",
+  "job-boards.greenhouse.io/schneiderelectric":
+    "https://careers.se.com/careers-at-schneider-electric",
+  "job-boards.greenhouse.io/saplabs": "https://jobs.sap.com/",
+  "job-boards.greenhouse.io/philips": "https://careers.philips.com/",
+  "careers.sw.siemens.com": "https://jobs.siemens.com/",
+  "jobs.amd.com": "https://careers.amd.com/",
+  "www.symplr.com/careers/india": "https://www.symplr.com/careers",
+  "symplr.com/careers/india": "https://www.symplr.com/careers",
+};
+
+/**
+ * Checks if a URL matches any known dead portal and returns its canonical replacement.
+ */
+export function getRedirectForDeadPortal(url: string | null | undefined): string | null {
+  if (!url || typeof url !== "string") return null;
+  const clean = url
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  for (const [deadPattern, canonical] of Object.entries(KNOWN_DEAD_PORTAL_REDIRECTS)) {
+    const cleanPattern = deadPattern
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/\/+$/, "");
+    if (
+      clean === cleanPattern ||
+      clean.startsWith(cleanPattern + "/") ||
+      clean.includes(cleanPattern)
+    ) {
+      return canonical;
+    }
+  }
+  return null;
+}
+
+/**
+ * Fast live probe of a career URL to detect 404s, domain drops, or unreachable servers.
+ */
+export async function probeCareerUrlLive(url: string): Promise<{
+  isAlive: boolean;
+  statusCode?: number;
+  finalUrl?: string;
+}> {
+  if (!url || !/^https?:\/\//i.test(url.trim())) {
+    return { isAlive: false, statusCode: 400 };
+  }
+  try {
+    const res = await fetch(url.trim(), {
+      method: "GET",
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+
+    if (res.status === 404 || res.status === 410) {
+      return { isAlive: false, statusCode: res.status };
+    }
+    // Greenhouse returns 404 status when board does not exist
+    if (url.includes("greenhouse.io") && res.status >= 400) {
+      return { isAlive: false, statusCode: res.status };
+    }
+    return {
+      isAlive: res.status < 400,
+      statusCode: res.status,
+      finalUrl: res.url || url,
+    };
+  } catch {
+    return { isAlive: false, statusCode: 0 };
+  }
+}
 
 /**
  * Checks if a given URL is a search engine result page.
@@ -243,6 +447,23 @@ export async function validateCareerUrl(
     };
   }
 
+  // Check if URL matches a known dead portal with a canonical replacement
+  const deadRedirect = getRedirectForDeadPortal(clean);
+  if (deadRedirect) {
+    const verifiedAts = deadRedirect.includes("workday") ? "Workday" : undefined;
+    return {
+      isValid: true,
+      status: "valid_company_portal",
+      isGenericSearch: false,
+      isAggregator: false,
+      originalUrl: clean,
+      normalizedUrl: deadRedirect,
+      detectedAts: verifiedAts,
+      reason: `Redirected known outdated link to verified portal (${deadRedirect})`,
+      suggestedUrl: deadRedirect,
+    };
+  }
+
   // 4. URL Parse & Normalization
   let urlObj: URL;
   try {
@@ -334,10 +555,29 @@ export function getVerifiedPortalForName(companyName: string): string | null {
   if (VERIFIED_PORTAL_DIRECTORY[norm]) {
     return VERIFIED_PORTAL_DIRECTORY[norm]!;
   }
+  const cleanNoParens = norm.replace(/\s*\([^)]*\)/g, "").trim();
+  if (cleanNoParens && VERIFIED_PORTAL_DIRECTORY[cleanNoParens]) {
+    return VERIFIED_PORTAL_DIRECTORY[cleanNoParens]!;
+  }
+  const matchInParens = norm
+    .match(/\(([^)]+)\)/)?.[1]
+    ?.trim()
+    .toLowerCase();
+  if (matchInParens && VERIFIED_PORTAL_DIRECTORY[matchInParens]) {
+    return VERIFIED_PORTAL_DIRECTORY[matchInParens]!;
+  }
   const stripped = norm.replace(/[^a-z0-9]/g, "");
   for (const [key, val] of Object.entries(VERIFIED_PORTAL_DIRECTORY)) {
     if (key.replace(/[^a-z0-9]/g, "") === stripped) {
       return val;
+    }
+  }
+  if (cleanNoParens) {
+    const strippedClean = cleanNoParens.replace(/[^a-z0-9]/g, "");
+    for (const [key, val] of Object.entries(VERIFIED_PORTAL_DIRECTORY)) {
+      if (key.replace(/[^a-z0-9]/g, "") === strippedClean) {
+        return val;
+      }
     }
   }
   return null;

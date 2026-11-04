@@ -160,6 +160,21 @@ describe("Career URL Validation & Flagging Service", () => {
       expect(getVerifiedPortalForName("Postman")).toBe(
         "https://www.postman.com/company/careers/open-positions/",
       );
+      expect(getVerifiedPortalForName("National Instruments (NI)")).toBe(
+        "https://www.ni.com/en/about-ni/careers.html",
+      );
+      expect(getVerifiedPortalForName("National Instruments")).toBe(
+        "https://www.ni.com/en/about-ni/careers.html",
+      );
+      expect(getVerifiedPortalForName("NI")).toBe("https://www.ni.com/en/about-ni/careers.html");
+      expect(getVerifiedPortalForName("Tata Consultancy Services (TCS)")).toBe(
+        "https://www.tcs.com/careers",
+      );
+      expect(getVerifiedPortalForName("AMD")).toBe("https://careers.amd.com/");
+      expect(getVerifiedPortalForName("amd")).toBe("https://careers.amd.com/");
+      expect(getVerifiedPortalForName("Advanced Micro Devices (AMD)")).toBe(
+        "https://careers.amd.com/",
+      );
     });
   });
 });

@@ -41,6 +41,27 @@ describe("Canonical Career Search Backend Service", () => {
       }
     });
 
+    it("returns verified canonical URL for National Instruments (NI)", async () => {
+      const res = await querySearchApiForCanonicalUrl("National Instruments (NI)");
+      expect(res.status).toBe("verified_canonical");
+      expect(res.canonicalUrl).toBe("https://www.ni.com/en/about-ni/careers.html");
+      expect(isGenericSearchUrl(res.canonicalUrl!)).toBe(false);
+    });
+
+    it("returns verified canonical URL for Tata Consultancy Services (TCS)", async () => {
+      const res = await querySearchApiForCanonicalUrl("Tata Consultancy Services (TCS)");
+      expect(res.status).toBe("verified_canonical");
+      expect(res.canonicalUrl).toBe("https://www.tcs.com/careers");
+      expect(isGenericSearchUrl(res.canonicalUrl!)).toBe(false);
+    });
+
+    it("returns verified canonical URL for AMD", async () => {
+      const res = await querySearchApiForCanonicalUrl("AMD");
+      expect(res.status).toBe("verified_canonical");
+      expect(res.canonicalUrl).toBe("https://careers.amd.com/");
+      expect(isGenericSearchUrl(res.canonicalUrl!)).toBe(false);
+    });
+
     it("handles empty or whitespace company names gracefully", async () => {
       const res = await querySearchApiForCanonicalUrl("   ");
       expect(res.status).toBe("not_found");
@@ -165,11 +186,16 @@ describe("Canonical Career Search Backend Service", () => {
           name: "Swiggy",
           careers_url: "https://careers.swiggy.com/", // already valid direct portal
         },
+        {
+          id: "comp-40",
+          name: "AMD",
+          careers_url: "https://jobs.amd.com/", // outdated dead host
+        },
       ]);
 
       const summary = await autoUpdateCompaniesWithGenericUrls(mockDb);
-      expect(summary.totalProcessed).toBe(3);
-      expect(summary.updatedCount).toBe(2);
+      expect(summary.totalProcessed).toBe(4);
+      expect(summary.updatedCount).toBe(3);
 
       const dbComps = mockDb._getCompanies();
       // Atlassian updated
@@ -190,6 +216,12 @@ describe("Canonical Career Search Backend Service", () => {
           (c: { id: string; name: string; careers_url: string | null }) => c.name === "Swiggy",
         )?.careers_url,
       ).toBe("https://careers.swiggy.com/");
+      // AMD updated from dead jobs.amd.com to verified careers.amd.com
+      expect(
+        dbComps.find(
+          (c: { id: string; name: string; careers_url: string | null }) => c.name === "AMD",
+        )?.careers_url,
+      ).toBe("https://careers.amd.com/");
     });
   });
 });

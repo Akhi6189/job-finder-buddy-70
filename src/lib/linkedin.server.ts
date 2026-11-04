@@ -174,15 +174,13 @@ export async function analyzeLinkedInProfile(params: {
   const combinedContext =
     [rawText, existingResume].filter(Boolean).join("\n\n") || DEFAULT_SDET_RESUME;
 
-  // Attempt AI extraction via Gemini if key is available
-  const apiKey = process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"];
+  const { getGeminiClient, getValidGeminiApiKey } =
+    await import("./canonical-career-search.server");
+  const apiKey = getValidGeminiApiKey();
   if (apiKey) {
     try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-      });
+      const ai = getGeminiClient();
+      if (!ai) throw new Error("AI not initialized");
 
       const prompt = `You are an elite executive talent recruiter and career architect.
 Analyze this candidate's LinkedIn profile and resume data to evaluate their career profile and match them to open roles.

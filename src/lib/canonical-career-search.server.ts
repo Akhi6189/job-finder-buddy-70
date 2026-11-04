@@ -7,6 +7,8 @@ import {
   validateCareerUrl,
   getVerifiedPortalForName,
   VERIFIED_PORTAL_DIRECTORY,
+  probeCareerUrlLive,
+  getRedirectForDeadPortal,
 } from "./validate-career-url.server";
 
 type DB = SupabaseClient<Database>;
@@ -33,14 +35,37 @@ export interface CompanyUpdateResult {
   source: string;
 }
 
-const ai = new GoogleGenAI({
-  apiKey: process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"],
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
-});
+export function getValidGeminiApiKey(): string | null {
+  const key = process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"];
+  if (
+    !key ||
+    typeof key !== "string" ||
+    !key.trim() ||
+    key.includes("PLACEHOLDER") ||
+    key === "undefined" ||
+    key === "null"
+  ) {
+    return null;
+  }
+  return key.trim();
+}
+
+let cachedAi: GoogleGenAI | null = null;
+export function getGeminiClient(): GoogleGenAI | null {
+  const key = getValidGeminiApiKey();
+  if (!key) return null;
+  if (!cachedAi) {
+    cachedAi = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+  }
+  return cachedAi;
+}
 
 /**
  * Known ATS platforms and their signature domains.
@@ -93,19 +118,50 @@ function scoreCandidateUrl(
   const hostname = urlObj.hostname.toLowerCase();
   const pathname = urlObj.pathname.toLowerCase();
 
+  const normComp = companyName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const baseComp = companyName
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/[^a-z0-9]/g, "");
+  const parenComp = (companyName.match(/\(([^)]+)\)/)?.[1] || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  const fullUrlNorm = (hostname + pathname).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  const compVariants = Array.from(new Set([normComp, baseComp, parenComp])).filter(
+    (v) => v.length >= 2,
+  );
+
   // 1. Check for ATS platform signature (Highest priority: 100-110 points)
   for (const [sigDomain, atsName] of Object.entries(KNOWN_ATS_SIGNATURES)) {
     if (hostname.includes(sigDomain)) {
-      return { score: 100, detectedAts: atsName };
+      const atsMatch = compVariants.some((v) => fullUrlNorm.includes(v));
+      if (atsMatch) {
+        return { score: 110, detectedAts: atsName };
+      }
+      return { score: -1 };
     }
+  }
+
+  const normHost = hostname.replace(/[^a-z0-9]/g, "");
+  const normPath = pathname.replace(/[^a-z0-9]/g, "");
+  const hasCompMatch = compVariants.some(
+    (v) =>
+      (v.length >= 3 && (normHost.includes(v) || normPath.includes(v))) ||
+      (normHost.length >= 4 && v.includes(normHost)) ||
+      (v.length >= 2 && normHost === v) ||
+      (v.length >= 2 && normHost.includes(v)),
+  );
+
+  // If the company name doesn't match the URL at all, reject this candidate
+  if (!hasCompMatch) {
+    return { score: -1 };
   }
 
   let score = 40;
 
-  // 2. Company name match in hostname (e.g. veeam.com, scopely.com)
-  const normComp = companyName.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const normHost = hostname.replace(/[^a-z0-9]/g, "");
-  if (normHost.includes(normComp) || normComp.includes(normHost)) {
+  // 2. Company name match in hostname (e.g. veeam.com, scopely.com, ni.com)
+  if (compVariants.some((v) => normHost.includes(v))) {
     score += 25;
   }
 
@@ -137,6 +193,115 @@ function scoreCandidateUrl(
  * Uses a search API to query '[Company Name] career page' and extracts the
  * verified official canonical career URL, bypassing generic search results.
  */
+/**
+ * Probes direct ATS endpoints and standard careers subdomains for a company name.
+ */
+async function probeDirectCareerEndpoints(companyName: string): Promise<string[]> {
+  const norm = companyName.trim();
+  const cleanNoParens = norm.replace(/\s*\([^)]*\)/g, "").trim();
+  const matchInParens = (norm.match(/\(([^)]+)\)/)?.[1] || "").trim();
+
+  const nameVariants = [norm, cleanNoParens, matchInParens].filter(Boolean);
+  const slugsSet = new Set<string>();
+
+  for (const n of nameVariants) {
+    const slugSimple = n.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const slugHyphen = n
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    if (slugSimple) slugsSet.add(slugSimple);
+    if (slugHyphen) slugsSet.add(slugHyphen);
+  }
+  const slugs = Array.from(slugsSet);
+
+  const potentialUrls: string[] = [];
+  for (const s of slugs) {
+    potentialUrls.push(
+      `https://careers.${s}.com`,
+      `https://jobs.${s}.com`,
+      `https://job-boards.greenhouse.io/${s}`,
+      `https://boards.greenhouse.io/${s}`,
+      `https://jobs.lever.co/${s}`,
+      `https://jobs.ashbyhq.com/${s}`,
+      `https://www.${s}.com/careers`,
+      `https://www.${s}.com/jobs`,
+    );
+  }
+
+  const verified: string[] = [];
+  await Promise.all(
+    potentialUrls.map(async (testUrl) => {
+      try {
+        const res = await fetch(testUrl, {
+          method: "HEAD",
+          signal: AbortSignal.timeout(2500),
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          },
+        });
+        if (res.ok && res.status >= 200 && res.status < 400) {
+          const finalUrl = res.url || testUrl;
+          if (!isGenericSearchUrl(finalUrl) && !isJobAggregatorUrl(finalUrl)) {
+            verified.push(finalUrl);
+          }
+        }
+      } catch {
+        // endpoint not reachable or timed out
+      }
+    }),
+  );
+
+  return verified;
+}
+
+/**
+ * Public search fallback using DuckDuckGo when Gemini Search Grounding is rate-limited (429) or times out.
+ */
+async function queryPublicWebSearchForCareers(companyName: string): Promise<string[]> {
+  const urls: string[] = [];
+  try {
+    const q = encodeURIComponent(`${companyName.trim()} careers official website`);
+    const endpoint = `https://html.duckduckgo.com/html/?q=${q}`;
+    const res = await fetch(endpoint, {
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    });
+
+    if (res.ok) {
+      const html = await res.text();
+      const matches = [...html.matchAll(/uddg=([^&"'>\s]+)/gi)];
+      for (const m of matches) {
+        try {
+          const decoded = decodeURIComponent(m[1]);
+          if (
+            /^https?:\/\//i.test(decoded) &&
+            !isGenericSearchUrl(decoded) &&
+            !isJobAggregatorUrl(decoded) &&
+            !urls.includes(decoded)
+          ) {
+            urls.push(decoded);
+          }
+        } catch {
+          // ignore decode errors
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Public web search error:", err);
+  }
+  return urls;
+}
+
+/**
+ * Uses a multi-tier search and probing engine to query '[Company Name] career page'
+ * and extracts the verified official canonical career URL, bypassing generic search results.
+ */
 export async function querySearchApiForCanonicalUrl(
   companyName: string,
 ): Promise<CanonicalSearchResult> {
@@ -151,7 +316,7 @@ export async function querySearchApiForCanonicalUrl(
     };
   }
 
-  // 1. Check curated directory of known verified portals for instant canonical mapping
+  // 1. Tier 1: Check curated directory of known verified portals for instant canonical mapping
   const directoryUrl = getVerifiedPortalForName(norm);
   if (directoryUrl) {
     return {
@@ -163,14 +328,51 @@ export async function querySearchApiForCanonicalUrl(
     };
   }
 
-  // 2. Execute live search API query: "[Company Name] career page" with Google Search Grounding
-  const apiKey = process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"];
-  const candidateUrls: string[] = [];
+  // 2. Tier 2: High-speed direct probing for common canonical career subdomains and ATS patterns
+  const probedUrls = await probeDirectCareerEndpoints(norm);
+  if (probedUrls.length > 0) {
+    let bestProbedUrl: string | null = null;
+    let bestProbedScore = -1;
+    let detectedAts: string | undefined;
 
-  if (apiKey) {
-    try {
-      const searchQuery = `${norm} career page`;
-      const prompt = `You are a talent research specialist.
+    for (const u of probedUrls) {
+      const { score, detectedAts: ats } = scoreCandidateUrl(u, norm);
+      if (score > bestProbedScore) {
+        bestProbedScore = score;
+        bestProbedUrl = u;
+        detectedAts = ats;
+      }
+    }
+
+    if (bestProbedUrl && bestProbedScore >= 40) {
+      const val = await validateCareerUrl(bestProbedUrl, norm);
+      if (val.isValid && !val.isGenericSearch && !val.isAggregator) {
+        return {
+          companyName: norm,
+          canonicalUrl: val.normalizedUrl,
+          status: "verified_canonical",
+          source: "directory",
+          detectedAts: detectedAts || val.detectedAts,
+          reason: detectedAts
+            ? `Verified official ${detectedAts} ATS portal via direct probe`
+            : "Verified official company career portal via direct probe",
+          searchResultsChecked: probedUrls.length,
+          allCandidateUrls: probedUrls,
+        };
+      }
+    }
+  }
+
+  // 3. Tier 3: Search API query with Google Search Grounding
+  const geminiAi = getGeminiClient();
+  const candidateUrls: string[] = [...probedUrls];
+
+  if (geminiAi) {
+    const models = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+    for (const model of models) {
+      try {
+        const searchQuery = `${norm} career page`;
+        const prompt = `You are a talent research specialist.
 Perform a live web search for: "${searchQuery}".
 Find the EXACT official, direct career site or ATS job board URL for company: "${norm}".
 CRITICAL CONSTRAINTS:
@@ -180,65 +382,85 @@ CRITICAL CONSTRAINTS:
 4. If their direct careers site is known (e.g. https://company.com/careers or https://jobs.company.com), return that.
 5. Provide the exact canonical URL in your answer.`;
 
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model: "gemini-3.8-flash",
-          contents: prompt,
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Search API timeout")), 6000),
-        ),
-      ]);
+        const response = await Promise.race([
+          geminiAi.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              tools: [{ googleSearch: {} }],
+            },
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Search API timeout")), 10000),
+          ),
+        ]);
 
-      // Extract search URLs from live Google Search grounding chunks
-      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      for (const chunk of chunks) {
-        const uri = chunk.web?.uri;
-        if (uri && typeof uri === "string" && /^https?:\/\//i.test(uri)) {
-          if (!isGenericSearchUrl(uri) && !isJobAggregatorUrl(uri)) {
-            candidateUrls.push(uri.trim());
+        // Extract search URLs from live Google Search grounding chunks
+        const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        for (const chunk of chunks) {
+          const uri = chunk.web?.uri;
+          if (uri && typeof uri === "string" && /^https?:\/\//i.test(uri)) {
+            if (!isGenericSearchUrl(uri) && !isJobAggregatorUrl(uri)) {
+              candidateUrls.push(uri.trim());
+            }
           }
         }
-      }
 
-      // Also extract any direct URL returned in the model's textual synthesis
-      const text = response.text || "";
-      const textUrls = text.match(/https?:\/\/[^\s"'<>()[\]{}]+/gi) || [];
-      for (const u of textUrls) {
-        const clean = u.replace(/[.,;:]$/, "").trim();
-        if (
-          clean &&
-          !isGenericSearchUrl(clean) &&
-          !isJobAggregatorUrl(clean) &&
-          !candidateUrls.includes(clean)
-        ) {
-          candidateUrls.push(clean);
+        // Also extract any direct URL returned in the model's textual synthesis
+        const text = response.text || "";
+        const textUrls = text.match(/https?:\/\/[^\s"'<>()[\]{}]+/gi) || [];
+        for (const u of textUrls) {
+          const clean = u.replace(/[.,;:]$/, "").trim();
+          if (
+            clean &&
+            !isGenericSearchUrl(clean) &&
+            !isJobAggregatorUrl(clean) &&
+            !candidateUrls.includes(clean)
+          ) {
+            candidateUrls.push(clean);
+          }
         }
+
+        if (candidateUrls.length > 0) break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (
+          msg.includes("API key not valid") ||
+          msg.includes("API_KEY_INVALID") ||
+          msg.includes("400") ||
+          msg.includes("403")
+        ) {
+          console.warn(
+            `Search API query skipped for "${norm}": Gemini API key is missing or invalid. Check Settings > Secrets.`,
+          );
+          break; // Stop immediately; do not spam logs with other models
+        }
+        console.warn(`Search API query (${model}) failed for "${norm}": ${msg}`);
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`Search API query failed for "${norm}": ${msg}`);
     }
   }
 
-  // 3. Fallback: If live search returned no candidates, query Gemini Flash Lite without grounding
-  if (candidateUrls.length === 0 && apiKey) {
+  // 4. Tier 4: Public web search fallback if search grounding was rate-limited (429), unavailable, or empty
+  if (candidateUrls.length === 0) {
+    const publicResults = await queryPublicWebSearchForCareers(norm);
+    candidateUrls.push(...publicResults);
+  }
+
+  // 5. Tier 5: Fallback to lightweight model synthesis without grounding if still empty
+  if (candidateUrls.length === 0 && geminiAi) {
     try {
       const prompt = `Return ONLY a valid JSON object with the official career page or ATS link for company "${norm}".
 CRITICAL: Do NOT return a search query link (google.com/search) or aggregator.
 {"careers_url": "https://..." or null}`;
 
       const res = await Promise.race([
-        ai.models.generateContent({
+        geminiAi.models.generateContent({
           model: "gemini-3.1-flash-lite",
           contents: prompt,
           config: { responseMimeType: "application/json" },
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Fallback timeout")), 2500),
+          setTimeout(() => reject(new Error("Fallback timeout")), 3500),
         ),
       ]);
 
@@ -262,36 +484,37 @@ CRITICAL: Do NOT return a search query link (google.com/search) or aggregator.
     }
   }
 
-  // 4. Evaluate and select the best canonical career URL
+  // 6. Evaluate and select the best canonical career URL (with live 404 probe verification)
   if (candidateUrls.length > 0) {
-    let bestUrl: string | null = null;
-    let bestScore = -1;
-    let detectedAts: string | undefined;
+    const scoredCandidates = candidateUrls
+      .map((u) => {
+        const { score, detectedAts: ats } = scoreCandidateUrl(u, norm);
+        return { url: u, score, detectedAts: ats };
+      })
+      .filter((c) => c.score > 0);
 
-    for (const url of candidateUrls) {
-      const { score, detectedAts: ats } = scoreCandidateUrl(url, norm);
-      if (score > bestScore) {
-        bestScore = score;
-        bestUrl = url;
-        detectedAts = ats;
-      }
-    }
+    scoredCandidates.sort((a, b) => b.score - a.score);
 
-    if (bestUrl && bestScore > 0) {
-      const val = await validateCareerUrl(bestUrl, norm);
-      if (val.isValid && !val.isGenericSearch && !val.isAggregator) {
-        return {
-          companyName: norm,
-          canonicalUrl: val.normalizedUrl,
-          status: "verified_canonical",
-          source: "search_api_grounding",
-          detectedAts: detectedAts || val.detectedAts,
-          reason: detectedAts
-            ? `Verified official ${detectedAts} ATS portal via Search API`
-            : "Verified canonical career portal via Search API",
-          searchResultsChecked: candidateUrls.length,
-          allCandidateUrls: candidateUrls,
-        };
+    for (const cand of scoredCandidates) {
+      const val = await validateCareerUrl(cand.url, norm);
+      if (val.isValid && !val.isGenericSearch && !val.isAggregator && val.normalizedUrl) {
+        // Fast probe to ensure URL is not returning 404/410 Not Found
+        const probe = await probeCareerUrlLive(val.normalizedUrl);
+        if (probe.isAlive) {
+          const finalUrl = probe.finalUrl || val.normalizedUrl;
+          return {
+            companyName: norm,
+            canonicalUrl: finalUrl,
+            status: "verified_canonical",
+            source: cand.score >= 100 ? "search_api_grounding" : "search_api_model",
+            detectedAts: cand.detectedAts || val.detectedAts,
+            reason: cand.detectedAts
+              ? `Verified official ${cand.detectedAts} ATS portal via Search API`
+              : "Verified canonical career portal via Search API",
+            searchResultsChecked: candidateUrls.length,
+            allCandidateUrls: candidateUrls,
+          };
+        }
       }
     }
   }
@@ -301,7 +524,7 @@ CRITICAL: Do NOT return a search query link (google.com/search) or aggregator.
     canonicalUrl: null,
     status: "not_found",
     source: "none",
-    reason: `No verified canonical career portal found for "${norm}". Generic search results were filtered out.`,
+    reason: `Could not locate a verified direct careers portal for "${norm}". Generic search results and aggregators were filtered out.`,
     searchResultsChecked: candidateUrls.length,
     allCandidateUrls: candidateUrls,
   };
@@ -432,9 +655,22 @@ export async function autoUpdateCompaniesWithGenericUrls(
     const isSearch = Boolean(comp.careers_url && isGenericSearchUrl(comp.careers_url));
     const isAggregator = Boolean(comp.careers_url && isJobAggregatorUrl(comp.careers_url));
     const isMissing = !comp.careers_url;
+    const verifiedPortal = getVerifiedPortalForName(comp.name);
+    const isOutdatedKnownPortal = Boolean(
+      verifiedPortal && comp.careers_url && comp.careers_url !== verifiedPortal,
+    );
+    const deadRedirect = getRedirectForDeadPortal(comp.careers_url);
+    const isDeadPortal = Boolean(deadRedirect && comp.careers_url !== deadRedirect);
 
-    // Process if forceAll, or if the URL is a generic search URL, aggregator, or missing
-    if (options?.forceAll || isSearch || isAggregator || isMissing) {
+    // Process if forceAll, or if the URL is a generic search URL, aggregator, missing, outdated, or dead
+    if (
+      options?.forceAll ||
+      isSearch ||
+      isAggregator ||
+      isMissing ||
+      isOutdatedKnownPortal ||
+      isDeadPortal
+    ) {
       try {
         const res = await updateCompanyWithCanonicalUrl(db, comp.id, comp.name);
         if (res.updated) {

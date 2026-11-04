@@ -1,10 +1,18 @@
 import dns from "node:dns";
 import * as cheerio from "cheerio";
-import { GoogleGenAI } from "@google/genai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { computeATSScore, DEFAULT_SDET_RESUME } from "./ats-score";
-import { isGenericSearchUrl } from "./validate-career-url.server";
+import {
+  isGenericSearchUrl,
+  isJobAggregatorUrl,
+  VERIFIED_PORTAL_DIRECTORY,
+  KNOWN_DEAD_PORTAL_REDIRECTS,
+  getRedirectForDeadPortal,
+  probeCareerUrlLive,
+  resolveDirectCareerUrl,
+} from "./validate-career-url.server";
+import { getGeminiClient } from "./canonical-career-search.server";
 
 // Force IPv4 first to prevent hanging on IPv6 in container environment
 try {
@@ -14,15 +22,6 @@ try {
 }
 
 type DB = SupabaseClient<Database>;
-
-const ai = new GoogleGenAI({
-  apiKey: process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"],
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
-});
 
 export class PauseError extends Error {}
 
@@ -35,61 +34,7 @@ export type ExtractedJob = {
 };
 
 /** Directory of verified portals for major/popular tech employers to avoid unnecessary AI requests */
-const KNOWN_COMPANY_PORTALS: Record<string, string> = {
-  scopely: "https://job-boards.greenhouse.io/scopely",
-  skillz: "https://job-boards.greenhouse.io/skillzinc",
-  "skillz inc": "https://job-boards.greenhouse.io/skillzinc",
-  zynga: "https://job-boards.greenhouse.io/zyngacareers?offices%5B%5D=4003581004",
-  "zynga / take-two": "https://job-boards.greenhouse.io/zyngacareers?offices%5B%5D=4003581004",
-  whatfix: "https://whatfix.com/careers/",
-  "ola electric": "https://olaelectric.darwinbox.in/ms/candidate/careers",
-  ola: "https://www.olacabs.com/careers",
-  postman: "https://www.postman.com/company/careers/open-positions/",
-  razorpay: "https://razorpay.com/jobs/",
-  intuit: "https://jobs.intuit.com/search-jobs/India",
-  browserstack: "https://www.browserstack.com/careers",
-  swiggy: "https://careers.swiggy.com/",
-  zomato: "https://www.zomato.com/careers",
-  paytm: "https://jobs.lever.co/paytm",
-  cred: "https://careers.cred.club/openings",
-  meesho: "https://www.meesho.io/jobs",
-  flipkart: "https://www.flipkartcareers.com/",
-  inmobi: "https://job-boards.greenhouse.io/inmobi",
-  freshworks: "https://careers.smartrecruiters.com/Freshworks",
-  "tata consultancy services": "https://www.tcs.com/careers",
-  tcs: "https://www.tcs.com/careers",
-  infosys: "https://career.infosys.com/joblist",
-  wipro: "https://careers.wipro.com/careers-home/jobs",
-  google: "https://careers.google.com/jobs/results/?location=India",
-  microsoft: "https://jobs.careers.microsoft.com/global/en/search?lc=India",
-  amazon: "https://www.amazon.jobs/en/locations/india",
-  apple: "https://jobs.apple.com/en-in/search?location=india-INDC",
-  meta: "https://www.metacareers.com/jobs?offices[0]=Bangalore%2C%20India",
-  nvidia: "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite",
-  atlassian: "https://www.atlassian.com/company/careers/all-jobs?location=India",
-  salesforce: "https://careers.salesforce.com/en/jobs/?country=India",
-  uber: "https://www.uber.com/in/en/careers/list/?location=IND",
-  cisco: "https://jobs.cisco.com/",
-  thoughtworks: "https://www.thoughtworks.com/careers/jobs?locations=India",
-  accenture: "https://www.accenture.com/in-en/careers/jobsearch",
-  capgemini: "https://www.capgemini.com/in-en/careers/job-search/",
-  cognizant: "https://careers.cognizant.com/global-en/jobs/?location=India",
-  adobe: "https://careers.adobe.com/us/en/search-results?keywords=india",
-  oracle: "https://careers.oracle.com/jobs/#en/sites/jobsearch/requisitions?location=India",
-  "rockstar games": "https://www.rockstargames.com/careers/openings/studio/india",
-  "electronic arts": "https://jobs.ea.com/en_US/careers/Home/",
-  qualcomm: "https://careers.qualcomm.com/careers?location=India",
-  visa: "https://corporate.visa.com/en/jobs/?cities=Bangalore",
-  paypal: "https://paypal.eightfold.ai/careers?location=India",
-  juspay: "https://juspay.io/careers",
-  hasura: "https://hasura.io/careers",
-  chargebee: "https://www.chargebee.com/careers/",
-  makemytrip: "https://careers.makemytrip.com/",
-  nykaa: "https://www.nykaa.com/careers",
-  dream11: "https://www.dreamsports.group/careers",
-  groww: "https://groww.in/careers",
-  zerodha: "https://careers.zerodha.com/",
-};
+const KNOWN_COMPANY_PORTALS: Record<string, string> = VERIFIED_PORTAL_DIRECTORY;
 
 /**
  * Uses verified directory or Gemini AI to locate genuine official careers portals.
@@ -100,6 +45,17 @@ export async function findCareersUrl(name: string, hint?: string): Promise<strin
   if (KNOWN_COMPANY_PORTALS[norm]) {
     return KNOWN_COMPANY_PORTALS[norm]!;
   }
+  const cleanNoParens = norm.replace(/\s*\([^)]*\)/g, "").trim();
+  if (cleanNoParens && KNOWN_COMPANY_PORTALS[cleanNoParens]) {
+    return KNOWN_COMPANY_PORTALS[cleanNoParens]!;
+  }
+  const matchInParens = norm
+    .match(/\(([^)]+)\)/)?.[1]
+    ?.trim()
+    .toLowerCase();
+  if (matchInParens && KNOWN_COMPANY_PORTALS[matchInParens]) {
+    return KNOWN_COMPANY_PORTALS[matchInParens]!;
+  }
 
   // Try matching without punctuation
   const stripped = norm.replace(/[^a-z0-9]/g, "");
@@ -108,9 +64,19 @@ export async function findCareersUrl(name: string, hint?: string): Promise<strin
       return val;
     }
   }
+  if (cleanNoParens) {
+    const strippedClean = cleanNoParens.replace(/[^a-z0-9]/g, "");
+    for (const [key, val] of Object.entries(KNOWN_COMPANY_PORTALS)) {
+      if (key.replace(/[^a-z0-9]/g, "") === strippedClean) {
+        return val;
+      }
+    }
+  }
 
-  const models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
-  const prompt = `You are a talent research specialist.
+  const geminiAi = getGeminiClient();
+  if (geminiAi) {
+    const models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
+    const prompt = `You are a talent research specialist.
 Find the exact official careers portal or ATS job board URL for company: "${name}"${hint ? ` (Hint: ${hint})` : ""}.
 CRITICAL: Do NOT return a Google search link (e.g. google.com/search). Do NOT return job aggregators like indeed or glassdoor.
 If they use an ATS like Greenhouse, Lever, Ashby, or Workday, return that exact ATS URL.
@@ -121,34 +87,49 @@ Return ONLY a valid JSON object:
   "careers_url": "https://..." or null
 }`;
 
-  for (const model of models) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-        config: { responseMimeType: "application/json" },
-      });
-      const text = response.text;
-      if (text) {
-        let clean = text.trim();
-        if (clean.startsWith("```")) {
-          clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    for (const model of models) {
+      try {
+        const response = await geminiAi.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseMimeType: "application/json" },
+        });
+        const text = response.text;
+        if (text) {
+          let clean = text.trim();
+          if (clean.startsWith("```")) {
+            clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+          }
+          const parsed = JSON.parse(clean);
+          if (
+            parsed.careers_url &&
+            /^https?:\/\//i.test(parsed.careers_url) &&
+            !isGenericSearchUrl(parsed.careers_url) &&
+            !isJobAggregatorUrl(parsed.careers_url)
+          ) {
+            return parsed.careers_url.trim();
+          }
         }
-        const parsed = JSON.parse(clean);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         if (
-          parsed.careers_url &&
-          /^https?:\/\//i.test(parsed.careers_url) &&
-          !isGenericSearchUrl(parsed.careers_url)
+          msg.includes("API key not valid") ||
+          msg.includes("API_KEY_INVALID") ||
+          msg.includes("400") ||
+          msg.includes("403")
         ) {
-          return parsed.careers_url.trim();
+          break; // Avoid spamming other models if the key is invalid
         }
       }
-    } catch {
-      // try next model
     }
   }
 
-  if (hint && /^https?:\/\//i.test(hint) && !isGenericSearchUrl(hint)) {
+  if (
+    hint &&
+    /^https?:\/\//i.test(hint) &&
+    !isGenericSearchUrl(hint) &&
+    !isJobAggregatorUrl(hint)
+  ) {
     return hint;
   }
 
@@ -435,6 +416,213 @@ async function fetchAshbyJobs(company: string): Promise<ExtractedJob[] | null> {
   return null;
 }
 
+/** Direct fetch from Workday CXS API with explicit tenant and site */
+async function fetchWorkdayJobsExplicit(
+  host: string,
+  tenant: string,
+  site: string,
+  companyName: string = "",
+): Promise<ExtractedJob[] | null> {
+  const jobs: ExtractedJob[] = [];
+  const offsets = [0, 20];
+  for (const offset of offsets) {
+    try {
+      const res = await fetch(`https://${host}/wday/cxs/${tenant}/${site}/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+        body: JSON.stringify({ appliedFacets: {}, limit: 20, offset, searchText: "" }),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!res.ok) break;
+      const data = await res.json();
+      if (data && Array.isArray(data.jobPostings)) {
+        for (const j of data.jobPostings) {
+          jobs.push({
+            title: j.title || "Open Role",
+            url: j.externalPath
+              ? `https://${host}/en-US/${site}${j.externalPath}`
+              : `https://${host}/${site}`,
+            location: j.locationsText ?? "",
+            experience: j.timeType ?? "",
+            description: `${j.title} at ${companyName || tenant} (${j.locationsText ?? "Various locations"})`,
+          });
+        }
+        if (data.jobPostings.length < 20) break;
+      }
+    } catch (e) {
+      console.debug(
+        `Workday explicit fetch notice (${tenant}, offset ${offset}):`,
+        e instanceof Error ? e.message : e,
+      );
+      if (jobs.length > 0) break;
+    }
+  }
+  return jobs.length > 0 ? jobs : null;
+}
+
+/** Direct fetch from Google Careers via embedded AF_initDataCallback */
+async function fetchGoogleCareersJobs(urlObj: URL): Promise<ExtractedJob[] | null> {
+  try {
+    const vm = await import("node:vm");
+    const targetUrl = urlObj.href.includes("location=")
+      ? urlObj.href
+      : "https://careers.google.com/jobs/results/?location=India";
+
+    const res = await fetch(targetUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const jobs: ExtractedJob[] = [];
+
+    $("script").each((_, el) => {
+      const text = $(el).html() || "";
+      if (
+        text.includes("AF_initDataCallback") &&
+        (text.includes("ds:1") || text.includes("jobs"))
+      ) {
+        const sandbox = {
+          AF_initDataCallback: (opts: { data?: unknown[] }) => {
+            if (Array.isArray(opts?.data?.[0])) {
+              for (const item of opts.data[0] as unknown[][]) {
+                if (item && item[1]) {
+                  const id = String(item[0] || "");
+                  const title = String(item[1] || "").trim();
+                  const desc = cleanHtmlText(String(item[2] || ""));
+                  const locArr = Array.isArray(item[9]) ? (item[9] as (string | unknown[])[]) : [];
+                  const loc = locArr
+                    .map((l) => (Array.isArray(l) ? String(l[0] || "") : String(l || "")))
+                    .filter(Boolean)
+                    .join("; ");
+
+                  if (title && id) {
+                    jobs.push({
+                      title,
+                      url: `https://www.google.com/about/careers/applications/jobs/results/${id}`,
+                      location: loc || "India",
+                      experience: "",
+                      description: desc || `${title} at Google (${loc})`,
+                    });
+                  }
+                }
+              }
+            }
+          },
+        };
+        vm.createContext(sandbox);
+        try {
+          vm.runInContext(text, sandbox);
+        } catch {
+          // ignore parsing error
+        }
+      }
+    });
+
+    if (jobs.length > 0) return jobs;
+  } catch (e) {
+    console.debug("Google Careers fetch error:", e);
+  }
+  return null;
+}
+
+/** Direct fetch from Applied Materials (Radancy / TalentBrew platform) */
+async function fetchAppliedMaterialsJobs(): Promise<ExtractedJob[] | null> {
+  try {
+    const endpoints = [
+      "https://jobs.appliedmaterials.com/search-jobs/India",
+      "https://jobs.appliedmaterials.com/search-jobs",
+    ];
+    for (const ep of endpoints) {
+      const res = await fetch(ep, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        signal: AbortSignal.timeout(9000),
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const $ = cheerio.load(html);
+      const jobs: ExtractedJob[] = [];
+
+      $("a[data-job-id], a.search-results-list__job-link, a[href*='/job/']").each((_, el) => {
+        const title = $(el).text().trim().replace(/\s+/g, " ");
+        let href = $(el).attr("href");
+        if (title && href && href.includes("/job/")) {
+          if (!href.startsWith("http")) {
+            href = `https://jobs.appliedmaterials.com${href}`;
+          }
+          const parent = $(el).closest("li, tr, .search-results-list__item, [data-job-id]");
+          const location =
+            parent
+              .find(".job-location, .search-results-list__job-location, .location")
+              .text()
+              .trim() || "Bengaluru, India";
+          if (!jobs.some((j) => j.title === title || j.url === href)) {
+            jobs.push({
+              title,
+              url: href,
+              location,
+              experience: "",
+              description: `${title} at Applied Materials (${location})`,
+            });
+          }
+        }
+      });
+
+      if (jobs.length > 0) return jobs;
+    }
+  } catch (e) {
+    console.debug("Applied Materials fetch error:", e);
+  }
+  return null;
+}
+
+/** Direct fetch from Amazon Jobs API */
+async function fetchAmazonJobs(urlObj: URL): Promise<ExtractedJob[] | null> {
+  try {
+    const res = await fetch(
+      "https://www.amazon.jobs/en/search.json?base_query=India&result_limit=100",
+      {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(9000),
+      },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && Array.isArray(data.jobs) && data.jobs.length > 0) {
+      return data.jobs.map(
+        (j: {
+          title: string;
+          job_path?: string;
+          city?: string;
+          country_code?: string;
+          description?: string;
+        }) => {
+          const loc = [j.city, j.country_code].filter(Boolean).join(", ");
+          return {
+            title: j.title || "Open Role",
+            url: j.job_path ? `https://www.amazon.jobs${j.job_path}` : urlObj.href,
+            location: loc || "India",
+            experience: "",
+            description: cleanHtmlText(j.description || `${j.title} at Amazon`),
+          };
+        },
+      );
+    }
+  } catch (e) {
+    console.debug("Amazon Jobs fetch error:", e);
+  }
+  return null;
+}
+
 /** Direct fetch from Workday CXS API */
 async function fetchWorkdayJobs(urlObj: URL): Promise<ExtractedJob[] | null> {
   try {
@@ -444,34 +632,107 @@ async function fetchWorkdayJobs(urlObj: URL): Promise<ExtractedJob[] | null> {
     const tenant = hostParts[0];
     if (!site || !tenant) return null;
 
-    const res = await fetch(`https://${urlObj.host}/wday/cxs/${tenant}/${site}/jobs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
-      body: JSON.stringify({ appliedFacets: {}, limit: 40, offset: 0, searchText: "" }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data && Array.isArray(data.jobPostings) && data.jobPostings.length > 0) {
-      return data.jobPostings.map(
-        (j: { title: string; externalPath?: string; locationsText?: string }) => ({
-          title: j.title || "Open Role",
-          url: j.externalPath ? `https://${urlObj.host}${j.externalPath}` : urlObj.href,
-          location: j.locationsText ?? "",
-          experience: "",
-          description: `${j.title} position in ${j.locationsText ?? "Various locations"}`,
-        }),
-      );
+    const jobs: ExtractedJob[] = [];
+    const offsets = [0, 20];
+    for (const offset of offsets) {
+      try {
+        const res = await fetch(`https://${urlObj.host}/wday/cxs/${tenant}/${site}/jobs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+          body: JSON.stringify({ appliedFacets: {}, limit: 20, offset, searchText: "" }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!res.ok) break;
+        const data = await res.json();
+        if (data && Array.isArray(data.jobPostings)) {
+          for (const j of data.jobPostings) {
+            jobs.push({
+              title: j.title || "Open Role",
+              url: j.externalPath
+                ? `https://${urlObj.host}/en-US/${site}${j.externalPath}`
+                : `https://${urlObj.host}/${site}`,
+              location: j.locationsText ?? "",
+              experience: j.timeType ?? "",
+              description: `${j.title} position in ${j.locationsText ?? "Various locations"}`,
+            });
+          }
+          if (data.jobPostings.length < 20) break;
+        }
+      } catch (e) {
+        console.debug(
+          `Workday fetch notice (${tenant}, offset ${offset}):`,
+          e instanceof Error ? e.message : e,
+        );
+        if (jobs.length > 0) break;
+      }
     }
+    return jobs.length > 0 ? jobs : null;
   } catch (e) {
-    console.warn("Workday fetch error:", e);
+    console.debug("Workday fetch notice:", e instanceof Error ? e.message : e);
   }
   return null;
 }
 
 /** Tries to identify ATS type and fetch structured jobs */
-async function tryDirectAtsFetch(careersUrl: string): Promise<ExtractedJob[] | null> {
+async function tryDirectAtsFetch(
+  careersUrl: string,
+  companyName: string = "",
+): Promise<ExtractedJob[] | null> {
   try {
     const urlObj = new URL(careersUrl);
+    const normName = companyName.toLowerCase().trim();
+
+    // 0a. Google Careers
+    if (urlObj.hostname.includes("careers.google.com") || urlObj.hostname.includes("google.com")) {
+      const jobs = await fetchGoogleCareersJobs(urlObj);
+      if (jobs && jobs.length > 0) return jobs;
+    }
+
+    // 0b. Applied Materials
+    if (
+      urlObj.hostname.includes("appliedmaterials.com") ||
+      normName.includes("applied materials")
+    ) {
+      const jobs = await fetchAppliedMaterialsJobs();
+      if (jobs && jobs.length > 0) return jobs;
+    }
+
+    // 0c. Amazon Jobs
+    if (urlObj.hostname.includes("amazon.jobs")) {
+      const jobs = await fetchAmazonJobs(urlObj);
+      if (jobs && jobs.length > 0) return jobs;
+    }
+
+    // 0d. GE Healthcare Workday ATS
+    if (
+      urlObj.hostname.includes("gehealthcare.com") ||
+      urlObj.hostname.includes("gehc.wd5.myworkdayjobs.com") ||
+      normName.includes("ge healthcare") ||
+      normName === "ge"
+    ) {
+      const jobs = await fetchWorkdayJobsExplicit(
+        "gehc.wd5.myworkdayjobs.com",
+        "gehc",
+        "GEHC_ExternalSite",
+        "GE Healthcare",
+      );
+      if (jobs && jobs.length > 0) return jobs;
+    }
+
+    // 0e. Target Workday ATS
+    if (
+      urlObj.hostname.includes("target.com") ||
+      urlObj.hostname.includes("target.wd5.myworkdayjobs.com") ||
+      normName === "target"
+    ) {
+      const jobs = await fetchWorkdayJobsExplicit(
+        "target.wd5.myworkdayjobs.com",
+        "target",
+        "targetcareers",
+        "Target",
+      );
+      if (jobs && jobs.length > 0) return jobs;
+    }
 
     // 1. Greenhouse
     if (urlObj.hostname.includes("greenhouse.io")) {
@@ -607,8 +868,9 @@ function isValidJobTitle(title: string): boolean {
   if (!title || title.length < 3 || title.length > 130) return false;
   if (/^https?:\/\//i.test(title)) return false;
   const boilerplateRegex =
-    /^(careers?|jobs?|all jobs|all roles|open positions|explore roles|search|apply|apply now|home|about|about us|contact|contact us|privacy|privacy policy|terms|terms of service|login|sign in|sign up|cookie|cookies|menu|navigation|back to top|filter|filter jobs|read more|learn more|view details|submit|newsletter|share|see all openings)$/i;
+    /^(careers?|jobs?|all jobs|all roles|open positions|explore roles|search|apply|apply now|home|about|about us|contact|contact us|privacy|privacy policy|terms|terms of service|login|sign in|sign up|cookie|cookies|menu|navigation|back to top|filter|filter jobs|read more|learn more|view details|submit|newsletter|share|see all openings|fraud\s*alert|scam\s*alert|fraud\s*notice|security\s*notice|disclaimer|terms\s*and\s*conditions)$/i;
   if (boilerplateRegex.test(title.trim())) return false;
+  if (/\b(fraud\s*alert|scam\s*alert)\b/i.test(title.trim())) return false;
   if (!/[a-zA-Z]/.test(title)) return false;
   return true;
 }
@@ -629,6 +891,7 @@ export function parseJobsFromHtml(
     if (!isValidJobTitle(cleanTitle)) return;
 
     let finalUrl = (job.url || "").trim();
+    if (/\.pdf(?:$|\?)/i.test(finalUrl)) return;
     if (!finalUrl || finalUrl === "#" || finalUrl.startsWith("javascript:")) {
       finalUrl = makeExactPostingUrl(companyName, cleanTitle, pageUrl, job.location);
     } else {
@@ -638,6 +901,7 @@ export function parseJobsFromHtml(
         finalUrl = makeExactPostingUrl(companyName, cleanTitle, pageUrl, job.location);
       }
     }
+    if (/\.pdf(?:$|\?)/i.test(finalUrl)) return;
 
     const cleanLocation = (job.location || "").trim();
     const cleanExperience = (job.experience || "").trim();
@@ -1110,6 +1374,9 @@ async function extractJobsWithAiFallback(
   careersUrl: string,
   companyName: string,
 ): Promise<ExtractedJob[] | null> {
+  const geminiAi = getGeminiClient();
+  if (!geminiAi) return null;
+
   try {
     const $ = cheerio.load(html);
     $("script, style, noscript, svg, nav, footer, header").remove();
@@ -1135,7 +1402,7 @@ Return ONLY a valid JSON array of objects:
   }
 ]`;
 
-    const response = await ai.models.generateContent({
+    const response = await geminiAi.models.generateContent({
       model: "gemini-3.1-flash-lite",
       contents: prompt,
       config: { responseMimeType: "application/json" },
@@ -1164,7 +1431,19 @@ Return ONLY a valid JSON array of objects:
       }
     }
   } catch (e) {
-    console.warn("AI extraction fallback error:", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    if (
+      msg.includes("API key not valid") ||
+      msg.includes("API_KEY_INVALID") ||
+      msg.includes("400") ||
+      msg.includes("403")
+    ) {
+      console.warn(
+        `AI extraction skipped for "${companyName}": Gemini API key is missing or invalid. Check Settings > Secrets.`,
+      );
+    } else {
+      console.warn(`AI extraction fallback notice for "${companyName}":`, msg);
+    }
   }
   return null;
 }
@@ -1175,8 +1454,23 @@ async function tryWebAndHtmlExtraction(
   companyName: string,
   keywords: string[],
 ): Promise<ExtractedJob[] | null> {
+  // Reject search engines and aggregators before issuing HTTP requests
+  if (isGenericSearchUrl(careersUrl) || isJobAggregatorUrl(careersUrl)) {
+    return null;
+  }
+
+  // Automatic translation of known dead or broken subdomains
+  let targetUrl = careersUrl;
+  for (const [deadPattern, canonicalUrl] of Object.entries(KNOWN_DEAD_PORTAL_REDIRECTS)) {
+    if (targetUrl.includes(deadPattern)) {
+      targetUrl = canonicalUrl;
+      break;
+    }
+  }
+
   try {
-    const res = await fetch(careersUrl, {
+    const res = await fetch(targetUrl, {
+      signal: AbortSignal.timeout(8000),
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -1187,7 +1481,7 @@ async function tryWebAndHtmlExtraction(
 
     if (!res.ok) return null;
 
-    if (res.url && res.url !== careersUrl) {
+    if (res.url && res.url !== targetUrl) {
       const redirectedAtsJobs = await tryDirectAtsFetch(res.url);
       if (redirectedAtsJobs && redirectedAtsJobs.length > 0) {
         return redirectedAtsJobs;
@@ -1213,18 +1507,56 @@ async function tryWebAndHtmlExtraction(
     }
 
     // Run Cheerio-powered robust HTML parser (handles nested accordions, cards, JSON-LD, preloaded state)
-    const domJobs = parseJobsFromHtml(html, res.url || careersUrl, companyName);
+    const domJobs = parseJobsFromHtml(html, res.url || targetUrl, companyName);
     if (domJobs && domJobs.length > 0) {
       return domJobs;
     }
 
     // If static DOM extraction found nothing, fallback to AI extraction over text content
-    const aiJobs = await extractJobsWithAiFallback(html, res.url || careersUrl, companyName);
+    const aiJobs = await extractJobsWithAiFallback(html, res.url || targetUrl, companyName);
     if (aiJobs && aiJobs.length > 0) {
       return aiJobs;
     }
   } catch (e) {
-    console.warn("tryWebAndHtmlExtraction error:", e);
+    // If the provided careersUrl failed (e.g. outdated host like jobs.amd.com or careers.sw.siemens.com),
+    // attempt to fallback to the curated verified portal for this company if one exists and differs
+    const verifiedPortal = await findCareersUrl(companyName).catch(() => null);
+    if (verifiedPortal && verifiedPortal !== targetUrl) {
+      try {
+        const retryRes = await fetch(verifiedPortal, {
+          signal: AbortSignal.timeout(8000),
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+          redirect: "follow",
+        });
+        if (retryRes.ok) {
+          const retryHtml = await retryRes.text();
+          if (retryHtml && retryHtml.length >= 100) {
+            const domJobs = parseJobsFromHtml(
+              retryHtml,
+              retryRes.url || verifiedPortal,
+              companyName,
+            );
+            if (domJobs && domJobs.length > 0) return domJobs;
+            const aiJobs = await extractJobsWithAiFallback(
+              retryHtml,
+              retryRes.url || verifiedPortal,
+              companyName,
+            );
+            if (aiJobs && aiJobs.length > 0) return aiJobs;
+          }
+        }
+      } catch {
+        // ignore retry errors
+      }
+    }
+
+    console.debug(
+      `[JobScanner] Careers page for "${companyName}" (${careersUrl}) requires browser rendering or is unreachable`,
+    );
   }
   return null;
 }
@@ -1320,7 +1652,7 @@ export async function extractJobs(
 ): Promise<ExtractedJob[]> {
   try {
     // Step 1: Direct public ATS API
-    let candidateJobs = await tryDirectAtsFetch(careersUrl);
+    let candidateJobs = await tryDirectAtsFetch(careersUrl, companyName);
 
     // Step 2: Web fetch + link inspection + Schema.org + page text
     if (!candidateJobs || candidateJobs.length === 0) {
@@ -1412,19 +1744,40 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
 
   try {
     let careersUrl = company.careers_url;
-
-    // Check if URL is suspicious or a naive /careers append or a 404 greenhouse guess
     const normName = company.name.trim().toLowerCase();
     const hasKnownPortal = Boolean(KNOWN_COMPANY_PORTALS[normName]);
+
+    // 1. Check if the URL is known to be dead and has a direct canonical replacement
+    const deadRedirect = getRedirectForDeadPortal(careersUrl);
+    if (deadRedirect && deadRedirect !== careersUrl) {
+      careersUrl = deadRedirect;
+      await db.from("companies").update({ careers_url: deadRedirect }).eq("id", company.id);
+    }
+
+    // 2. Check if known verified portal exists and differs from current
+    if (hasKnownPortal && KNOWN_COMPANY_PORTALS[normName] !== careersUrl) {
+      careersUrl = KNOWN_COMPANY_PORTALS[normName];
+      await db.from("companies").update({ careers_url: careersUrl }).eq("id", company.id);
+    }
+
+    // 3. Fast probe to verify URL is reachable and not returning 404 Not Found
     const isSearchUrl = Boolean(careersUrl && isGenericSearchUrl(careersUrl));
+    let isDead404 = false;
+    if (careersUrl && !isSearchUrl) {
+      const probe = await probeCareerUrlLive(careersUrl);
+      if (!probe.isAlive && probe.statusCode === 404) {
+        isDead404 = true;
+      }
+    }
+
     const isSuspiciousUrl =
       !careersUrl ||
       isSearchUrl ||
+      isDead404 ||
       careersUrl.endsWith("/careers") ||
       careersUrl.endsWith("/career") ||
       careersUrl.endsWith("/carrer") ||
-      !/^https?:\/\//i.test(careersUrl) ||
-      (hasKnownPortal && KNOWN_COMPANY_PORTALS[normName] !== careersUrl);
+      !/^https?:\/\//i.test(careersUrl);
 
     if (isSuspiciousUrl) {
       const { updateCompanyWithCanonicalUrl } = await import("./canonical-career-search.server");
@@ -1432,12 +1785,19 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
       if (updated.updated && updated.newUrl && !isGenericSearchUrl(updated.newUrl)) {
         careersUrl = updated.newUrl;
       } else {
-        const verifiedUrl = await findCareersUrl(company.name, careersUrl || undefined);
-        if (verifiedUrl && !isGenericSearchUrl(verifiedUrl)) {
-          careersUrl = verifiedUrl;
-          await db.from("companies").update({ careers_url: verifiedUrl }).eq("id", company.id);
-        } else if (isSearchUrl) {
-          // Clear corrupted search URL so database stays clean
+        const verifiedResult = await resolveDirectCareerUrl(company.name, careersUrl || undefined);
+        if (
+          verifiedResult.isValid &&
+          verifiedResult.url &&
+          !isGenericSearchUrl(verifiedResult.url)
+        ) {
+          careersUrl = verifiedResult.url;
+          await db
+            .from("companies")
+            .update({ careers_url: verifiedResult.url })
+            .eq("id", company.id);
+        } else if (isSearchUrl || isDead404) {
+          // Clear corrupted search or dead 404 URL so database stays clean
           careersUrl = null;
           await db.from("companies").update({ careers_url: null }).eq("id", company.id);
         }
@@ -1450,13 +1810,27 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
         .update({
           last_checked_at: new Date().toISOString(),
           last_error:
-            "Missing direct careers portal link. Generic search results cannot be scanned for jobs.",
+            "Missing authentic direct careers portal link. Generic search results cannot be scanned for jobs.",
         })
         .eq("id", trackedId);
       return { added: 0, checked: company.name, status: "needs_direct_careers_url" };
     }
 
-    const found = await extractJobs(careersUrl, keywords, company.name);
+    let found = await extractJobs(careersUrl, keywords, company.name);
+
+    // Self-healing retry: If 0 jobs found and the URL was a suspected dead or outdated board,
+    // re-query canonical career search to discover the authentic career portal.
+    if (found.length === 0 && (careersUrl.includes("greenhouse.io") || isSuspiciousUrl)) {
+      const resolved = await resolveDirectCareerUrl(company.name, null);
+      if (resolved.isValid && resolved.url && resolved.url !== careersUrl) {
+        const retryJobs = await extractJobs(resolved.url, keywords, company.name);
+        if (retryJobs.length > 0) {
+          careersUrl = resolved.url;
+          found = retryJobs;
+          await db.from("companies").update({ careers_url: resolved.url }).eq("id", company.id);
+        }
+      }
+    }
     const now = new Date().toISOString();
     let added = 0;
 
@@ -1506,7 +1880,7 @@ export async function scanTrackedCompany(db: DB, userId: string, trackedId: stri
     return { found: found.length, added };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`Scan error for ${company.name}:`, msg);
+    console.info(`Scan notice for ${company.name}:`, msg);
     await db
       .from("tracked_companies")
       .update({ last_checked_at: new Date().toISOString(), last_error: msg.slice(0, 300) })

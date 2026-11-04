@@ -554,9 +554,22 @@ function CompanyDialog({
                 </span>
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">
-                Direct ATS job board or company career page (e.g., Greenhouse, Lever, Workday).
-              </p>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  Direct ATS job board or company career page (e.g. Greenhouse, Lever, Workday).
+                </span>
+                {name.trim() && (
+                  <a
+                    href={`https://www.google.com/search?q=${encodeURIComponent(name.trim() + " careers")}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline shrink-0 ml-2"
+                  >
+                    <span>Google "{name.trim()} careers"</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
             )}
           </div>
           <Button variant="ink" className="w-full" disabled={isValidating} onClick={save}>

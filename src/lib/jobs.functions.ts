@@ -135,15 +135,19 @@ export const tailorResumeForJob = createServerFn({ method: "POST" })
       throw new Error("Please upload or paste your resume in Settings first");
     }
 
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({
-      apiKey: process.env["GEMINI_API_KEY"] || process.env["VITE_GEMINI_API_KEY"],
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
+    const { getGeminiClient, getValidGeminiApiKey } =
+      await import("./canonical-career-search.server");
+    if (!getValidGeminiApiKey()) {
+      throw new Error(
+        "A Gemini API key is required to tailor resumes with AI. Please configure your key in Settings > Secrets.",
+      );
+    }
+    const ai = getGeminiClient();
+    if (!ai) {
+      throw new Error(
+        "Could not initialize AI client. Please ensure your Gemini API key is set in Settings > Secrets.",
+      );
+    }
 
     const companyName = (job.companies as { name?: string } | null)?.name || "Company";
     const missing = job.missing_skills?.length
@@ -226,7 +230,18 @@ Return ONLY a valid JSON object matching this schema:
           tailoredResume: parsed.tailored_resume || s.resume_text,
         };
       } catch (err) {
-        console.warn(`Tailor resume model ${model} error:`, err);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes("API key not valid") ||
+          msg.includes("API_KEY_INVALID") ||
+          msg.includes("400") ||
+          msg.includes("403")
+        ) {
+          throw new Error(
+            "Your Gemini API key is invalid or not authorized. Please check your key in Settings > Secrets.",
+          );
+        }
+        console.warn(`Tailor resume model ${model} error:`, msg);
       }
     }
 
@@ -266,7 +281,8 @@ export const locateCareersForCompany = createServerFn({ method: "POST" })
     return {
       ok: false as const,
       error:
-        "Could not locate a verified direct careers portal via search API. Please enter the direct URL manually.",
+        res.reason ||
+        `Could not locate a verified direct careers portal for "${data.companyName}". Please enter the direct URL manually.`,
     };
   });
 

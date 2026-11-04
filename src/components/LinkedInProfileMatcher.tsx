@@ -689,7 +689,7 @@ export function LinkedInProfileMatcher({
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-4">
-              <ScoreRing score={activeRoleFit.matchScore} size="md" />
+              <ScoreRing score={activeRoleFit.matchScore} size={52} />
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wider text-primary">
                   Profile Compatibility
@@ -802,7 +802,7 @@ export function LinkedInProfileMatcher({
                       </div>
 
                       <div className="flex-shrink-0">
-                        <ScoreRing score={job.score} size="sm" />
+                        <ScoreRing score={job.score} size={36} />
                       </div>
                     </div>
 
@@ -911,7 +911,7 @@ export function LinkedInProfileMatcher({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {job.score !== null && <ScoreRing score={job.score} size="sm" />}
+                  {job.score !== null && <ScoreRing score={job.score} size={36} />}
                   {onTailorJob && (
                     <Button
                       variant="outline"
