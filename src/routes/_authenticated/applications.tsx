@@ -20,6 +20,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllRows, MAX_JOB_LIMIT } from "@/lib/supabase-pagination";
 import { ScoreRing } from "@/components/ScoreRing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,10 +81,16 @@ function ApplicationsPage() {
   const dbJobs = useQuery({
     queryKey: ["jobs_for_sync"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("jobs")
-        .select("*, companies(name)")
-        .eq("status", "applied");
+      const data = await fetchAllRows(
+        (from, to) =>
+          supabase
+            .from("jobs")
+            .select("*, companies(name)")
+            .eq("status", "applied")
+            .order("id", { ascending: false })
+            .range(from, to),
+        MAX_JOB_LIMIT,
+      );
       return data ?? [];
     },
   });

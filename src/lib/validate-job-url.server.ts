@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
+import { fetchAllRows, MAX_JOB_LIMIT } from "./supabase-pagination";
 
 type DB = SupabaseClient<Database>;
 
@@ -255,14 +256,41 @@ export async function validateAndPruneJobsServer(
   prunedCount: number;
   inactiveJobs: { id: string; title?: string; url: string; reason?: string }[];
 }> {
-  // Select all non-applied jobs
-  const query = db
-    .from("jobs")
-    .select("id, title, url, status, company_id")
-    .neq("status", "applied");
+  // Select all non-applied jobs (up to MAX_JOB_LIMIT)
+  let jobs: {
+    id: string;
+    title: string;
+    url: string;
+    status: string;
+    company_id: string;
+  }[] = [];
+  try {
+    jobs = await fetchAllRows<{
+      id: string;
+      title: string;
+      url: string;
+      status: string;
+      company_id: string;
+    }>(
+      (from, to) =>
+        db
+          .from("jobs")
+          .select("id, title, url, status, company_id")
+          .neq("status", "applied")
+          .order("id", { ascending: false })
+          .range(from, to),
+      MAX_JOB_LIMIT,
+    );
+  } catch {
+    return {
+      totalChecked: 0,
+      activeCount: 0,
+      prunedCount: 0,
+      inactiveJobs: [],
+    };
+  }
 
-  const { data: jobs, error } = await query;
-  if (error || !jobs?.length) {
+  if (!jobs.length) {
     return {
       totalChecked: 0,
       activeCount: 0,

@@ -33,6 +33,7 @@ import { getCompanyIndustry } from "@/lib/industry";
 import { scanCompany, rescoreJob, tailorResumeForJob } from "@/lib/jobs.functions";
 import { saveOrUpdateFromJob } from "@/lib/applications";
 import { ScoreRing } from "@/components/ScoreRing";
+import { fetchAllRows, MAX_JOB_LIMIT } from "@/lib/supabase-pagination";
 import { LinkedInProfileMatcher } from "@/components/LinkedInProfileMatcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -128,19 +129,34 @@ function JobsPage() {
   const jobs = useQuery({
     queryKey: ["jobs"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("jobs")
-        .select("*, companies(name, careers_url, category)")
-        .neq("status", "inactive")
-        .order("first_seen_at", { ascending: false })
-        .limit(1500);
-      if (error) throw error;
-      return data as Job[];
+      const allJobs = await fetchAllRows<Job>(
+        (from, to) =>
+          supabase
+            .from("jobs")
+            .select("*, companies(name, careers_url, category)")
+            .neq("status", "inactive")
+            .order("first_seen_at", { ascending: false })
+            .order("id", { ascending: false })
+            .range(from, to),
+        MAX_JOB_LIMIT,
+      );
+      return allJobs;
     },
   });
 
   const list = useMemo(() => {
-    let l = (jobs.data ?? []).filter(
+    const raw = jobs.data ?? [];
+    const seenIds = new Set<string>();
+    const uniqueJobs: Job[] = [];
+    for (const j of raw) {
+      if (!j) continue;
+      const key = j.id || (j as { title?: string }).title;
+      if (key && seenIds.has(key)) continue;
+      if (key) seenIds.add(key);
+      uniqueJobs.push(j);
+    }
+
+    let l = uniqueJobs.filter(
       (j) => j.status !== "inactive" && (!j.closed_at || j.status === "applied"),
     );
 
@@ -244,24 +260,40 @@ function JobsPage() {
     setProgress(null);
 
     // b. Pull all the job openings into memory and then only display the ones based on the filter
-    const { data: allFreshJobs, error: fetchErr } = await supabase
-      .from("jobs")
-      .select("*, companies(name, careers_url, category)")
-      .neq("status", "inactive")
-      .order("first_seen_at", { ascending: false })
-      .limit(1500);
-
-    if (fetchErr) {
-      toast.error(`Scan completed, but couldn't fetch jobs: ${fetchErr.message}`);
+    let freshList: Job[] = [];
+    try {
+      freshList = await fetchAllRows<Job>(
+        (from, to) =>
+          supabase
+            .from("jobs")
+            .select("*, companies(name, careers_url, category)")
+            .neq("status", "inactive")
+            .order("first_seen_at", { ascending: false })
+            .order("id", { ascending: false })
+            .range(from, to),
+        MAX_JOB_LIMIT,
+      );
+    } catch (fetchErr) {
+      const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+      toast.error(`Scan completed, but couldn't fetch jobs: ${msg}`);
       return;
     }
 
-    const freshList = (allFreshJobs as Job[]) || [];
+    // Deduplicate freshList before populating cache
+    const seenFreshIds = new Set<string>();
+    const dedupedFreshList: Job[] = [];
+    for (const j of freshList) {
+      if (j && j.id && !seenFreshIds.has(j.id)) {
+        seenFreshIds.add(j.id);
+        dedupedFreshList.push(j);
+      }
+    }
+
     // Populate query cache memory with ALL job openings
-    qc.setQueryData<Job[]>(["jobs"], freshList);
+    qc.setQueryData<Job[]>(["jobs"], dedupedFreshList);
 
     // Calculate how many match the active filter conditions
-    const matchedCount = freshList.filter((j) => {
+    const matchedCount = dedupedFreshList.filter((j) => {
       if (j.status === "inactive" || (j.closed_at && j.status !== "applied")) return false;
       if (tab === "open" && (j.status === "applied" || j.status === "inactive")) return false;
       if (tab === "applied" && j.status !== "applied") return false;
@@ -573,9 +605,9 @@ function JobsPage() {
             </div>
           ) : (
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {list.map((j) => (
+              {list.map((j, index) => (
                 <div
-                  key={j.id}
+                  key={j.id || `job-${index}`}
                   onClick={() => setSelected(j)}
                   className={`group flex flex-col justify-between rounded-xl border bg-card p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift cursor-pointer ${
                     j.closed_at ? "opacity-70" : ""
@@ -660,9 +692,9 @@ function JobsPage() {
                           <span>Missing keywords:</span>
                         </div>
                         <div className="mt-1.5 flex flex-wrap gap-1">
-                          {j.missing_skills.slice(0, 3).map((s) => (
+                          {j.missing_skills.slice(0, 3).map((s, sIdx) => (
                             <span
-                              key={s}
+                              key={`${s}-${sIdx}`}
                               className="inline-flex items-center rounded border border-destructive/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-destructive"
                             >
                               + {s}
@@ -688,9 +720,9 @@ function JobsPage() {
                             <span>Matched keywords:</span>
                           </div>
                           <div className="mt-1.5 flex flex-wrap gap-1">
-                            {j.matched_skills.slice(0, 3).map((s) => (
+                            {j.matched_skills.slice(0, 3).map((s, sIdx) => (
                               <span
-                                key={s}
+                                key={`${s}-${sIdx}`}
                                 className="inline-flex items-center rounded border border-success/30 bg-background px-1.5 py-0.5 text-[10px] font-medium text-success"
                               >
                                 ✓ {s}
@@ -936,9 +968,9 @@ function JobSheet({
                   <AlertCircle className="h-3.5 w-3.5" /> Missing Skills / Keywords (Lowers Score)
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {job.missing_skills.map((s) => (
+                  {job.missing_skills.map((s, sIdx) => (
                     <Badge
-                      key={s}
+                      key={`${s}-${sIdx}`}
                       variant="outline"
                       className="border-destructive/30 bg-background text-destructive text-xs"
                     >
@@ -960,9 +992,9 @@ function JobSheet({
                   <CheckCircle2 className="h-3.5 w-3.5" /> Matched Skills From Your Resume
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {job.matched_skills.map((s) => (
+                  {job.matched_skills.map((s, sIdx) => (
                     <Badge
-                      key={s}
+                      key={`${s}-${sIdx}`}
                       variant="outline"
                       className="border-success/30 bg-background text-success text-xs"
                     >

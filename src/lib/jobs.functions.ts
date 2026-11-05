@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { scanTrackedCompany, scoreJobs, findCareersUrl } from "./scan.server";
 import { computeATSScore } from "./ats-score";
+import { fetchAllRows, MAX_JOB_LIMIT } from "./supabase-pagination";
 
 try {
   dns.setDefaultResultOrder("ipv4first");
@@ -82,13 +83,28 @@ export const rescoreAllJobs = createServerFn({ method: "POST" })
 
     const resumeToUse = s?.resume_text?.trim() || DEFAULT_SDET_RESUME;
 
-    // Fetch all jobs in the database
-    const { data: allJobs, error } = await db
-      .from("jobs")
-      .select("id, title, description")
-      .order("first_seen_at", { ascending: false });
+    // Fetch all jobs in the database (up to MAX_JOB_LIMIT)
+    let allJobs: { id: string; title: string; description: string | null }[] = [];
+    try {
+      allJobs = await fetchAllRows<{
+        id: string;
+        title: string;
+        description: string | null;
+      }>(
+        (from, to) =>
+          db
+            .from("jobs")
+            .select("id, title, description")
+            .order("first_seen_at", { ascending: false })
+            .order("id", { ascending: false })
+            .range(from, to),
+        MAX_JOB_LIMIT,
+      );
+    } catch {
+      return { scored: 0, total: 0 };
+    }
 
-    if (error || !allJobs?.length) return { scored: 0, total: 0 };
+    if (!allJobs?.length) return { scored: 0, total: 0 };
 
     let updated = 0;
     const batchSize = 40;
